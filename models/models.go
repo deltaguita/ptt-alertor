@@ -13,5 +13,5 @@ var Article = func() *article.Article {
 	return article.NewArticle(new(article.DynamoDB))
 }
 var Board = func() *board.Board {
-	return board.NewBoard(new(board.DynamoDB), new(board.Redis))
+	return board.NewBoard(new(board.File), new(board.Redis))
 }

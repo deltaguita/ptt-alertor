@@ -25,7 +25,7 @@ var highBoards []*board.Board
 var highBoardNames = strings.Split(os.Getenv("BOARD_HIGH"), ",")
 
 func init() {
-	for _, name := range highBoardNames {
+	for _, name := range highBoardNames { if name == "" { continue }
 		bd := models.Board()
 		bd.Name = name
 		highBoards = append(highBoards, bd)
