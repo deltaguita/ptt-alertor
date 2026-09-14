@@ -17,6 +17,11 @@ type Subscription struct {
 	Authors  myutil.StringSlice `json:"authors"`
 	Articles myutil.StringSlice `json:"articles"`
 	PushSum  `json:"pushSum"`
+	// MaxPrices holds the price ceiling for keywords that have one, keyed by the
+	// lowercased keyword. A keyword absent here is matched on its title alone,
+	// which is the behaviour every subscription had before price tracking, so
+	// subscriptions stored without this field keep working untouched.
+	MaxPrices map[string]int `json:"maxPrices,omitempty"`
 }
 
 type PushSum struct {
@@ -72,6 +77,52 @@ func (s *Subscription) CleanUp() {
 
 func (s *Subscription) DeleteKeywords(keywords myutil.StringSlice) {
 	s.Keywords.Delete(keywords, false)
+	for _, keyword := range keywords {
+		delete(s.MaxPrices, strings.ToLower(keyword))
+	}
+	if len(s.MaxPrices) == 0 {
+		s.MaxPrices = nil
+	}
+}
+
+// SetMaxPrice attaches a price ceiling to a keyword. A ceiling of zero or less
+// removes it, mirroring how a push sum of zero cancels a push subscription.
+func (s *Subscription) SetMaxPrice(keyword string, maxPrice int) {
+	key := strings.ToLower(keyword)
+	if maxPrice <= 0 {
+		delete(s.MaxPrices, key)
+		if len(s.MaxPrices) == 0 {
+			s.MaxPrices = nil
+		}
+		return
+	}
+	if s.MaxPrices == nil {
+		s.MaxPrices = make(map[string]int)
+	}
+	s.MaxPrices[key] = maxPrice
+}
+
+// MaxPrice reports the ceiling set for a keyword, if any.
+func (s Subscription) MaxPrice(keyword string) (int, bool) {
+	maxPrice, ok := s.MaxPrices[strings.ToLower(keyword)]
+	return maxPrice, ok
+}
+
+// StringMaxPrice renders the board's price ceilings for the subscription list.
+func (s Subscription) StringMaxPrice() string {
+	if len(s.MaxPrices) == 0 {
+		return ""
+	}
+	keywords := make([]string, 0, len(s.MaxPrices))
+	for keyword := range s.MaxPrices {
+		keywords = append(keywords, keyword)
+	}
+	sort.Strings(keywords)
+	lines := make([]string, 0, len(keywords))
+	for _, keyword := range keywords {
+		lines = append(lines, fmt.Sprintf("%s: %s 上限 %d", s.Board, keyword, s.MaxPrices[keyword]))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (s *Subscription) DeleteAuthors(authors myutil.StringSlice) {

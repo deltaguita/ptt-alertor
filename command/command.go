@@ -54,6 +54,12 @@ var Commands = map[string]map[string]string{
 		"範例":              "新增推文數 joke,beauty 10",
 		"歸零即刪除":           "新增噓文數 joke 0",
 	},
+	"售價相關": {
+		"新增售價 看板 關鍵字 上限": "標題命中後再讀內文，售價低於上限才通知",
+		"刪除售價 看板 關鍵字":    "取消售價條件，關鍵字保留",
+		"範例":             "新增售價 macshop iPhone 17 Pro Max 35000",
+		"歸零即刪除":          "新增售價 macshop AirPods 0",
+	},
 	"推文相關": {
 		"新增推文 網址": "新增推文追蹤",
 		"刪除推文 網址": "刪除推文追蹤",
@@ -73,6 +79,8 @@ var commandActionMap = map[string]updateAction{
 	"刪除推文":  removeArticles,
 	"新增推文數": updatePushUp,
 	"新增噓文數": updatePushDown,
+	"新增售價":  addMaxPrice,
+	"刪除售價":  removeMaxPrice,
 }
 
 // HandleCommand handles command from chatbot
@@ -106,6 +114,12 @@ func HandleCommand(text string, userID string, isUser bool) string {
 		}
 		args := re.FindStringSubmatch(text)
 		result, err := handleKeyword(command, userID, args[2], args[3])
+		if err != nil {
+			return err.Error()
+		}
+		return result
+	case "新增售價", "刪除售價":
+		result, err := handleMaxPrice(command, userID, text)
 		if err != nil {
 			return err.Error()
 		}
@@ -364,6 +378,59 @@ func handleKeyword(command, userID, board, keywordStr string) (string, error) {
 	if err != nil {
 		log.WithError(err).Error("Keyword Command Failed")
 		return "", errors.New(command + updateFailedMsg)
+	}
+	return command + "成功", nil
+}
+
+// boardPattern matches the board list shared by every subscription command.
+const boardPattern = `([^,，][\w\-_,，\.]*[^,，:\s]):?`
+
+var (
+	// The ceiling is the trailing number, so the keyword in between may contain
+	// spaces -- "iPhone 17 Pro Max" is one keyword, not four.
+	addMaxPriceRe    = regexp.MustCompile(`^新增售價\s+` + boardPattern + `\s+(.+?)\s+(\d+)\s*$`)
+	removeMaxPriceRe = regexp.MustCompile(`^刪除售價\s+` + boardPattern + `\s+(.+?)\s*$`)
+)
+
+func handleMaxPrice(command, userID, text string) (string, error) {
+	var boardStr, word string
+	inputs := []string{}
+	if command == "新增售價" {
+		args := addMaxPriceRe.FindStringSubmatch(text)
+		if args == nil {
+			return "", errors.New(strings.Join(append(inputErrorTips,
+				"正確範例：",
+				"新增售價 macshop iPhone 17 Pro Max 35000",
+				"上限填 0 即刪除售價條件。",
+			), "\n"))
+		}
+		boardStr, word = args[1], args[2]
+		inputs = []string{word, args[3]}
+	} else {
+		args := removeMaxPriceRe.FindStringSubmatch(text)
+		if args == nil {
+			return "", errors.New(strings.Join(append(inputErrorTips,
+				"正確範例：",
+				"刪除售價 macshop iPhone 17 Pro Max",
+			), "\n"))
+		}
+		boardStr, word = args[1], args[2]
+		inputs = []string{word}
+	}
+	boardNames := splitParamString(boardStr)
+	log.WithFields(log.Fields{
+		"id":      userID,
+		"command": command,
+		"boards":  boardNames,
+		"word":    word,
+	}).Info("Max Price Command")
+	err := update(commandActionMap[command], userID, boardNames, inputs...)
+	if msg, ok := checkBoardError(err); ok {
+		return "", errors.New(msg)
+	}
+	if err != nil {
+		log.WithError(err).Error("Max Price Command Failed")
+		return "", errors.New(err.Error())
 	}
 	return command + "成功", nil
 }

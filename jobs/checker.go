@@ -16,6 +16,8 @@ import (
 	"github.com/Ptt-Alertor/ptt-alertor/models/board"
 	"github.com/Ptt-Alertor/ptt-alertor/models/keyword"
 	"github.com/Ptt-Alertor/ptt-alertor/models/user"
+	"github.com/Ptt-Alertor/ptt-alertor/price"
+	"github.com/Ptt-Alertor/ptt-alertor/ptt/web"
 )
 
 const checkHighBoardDuration = 30 * time.Second
@@ -213,19 +215,31 @@ func checkKeywordSubscription(user user.User, bd *board.Board, cker Checker) {
 		if bd.Name == sub.Board {
 			cker.board = sub.Board
 			for _, keyword := range sub.Keywords {
-				go checkKeyword(keyword, bd, cker)
+				maxPrice, _ := sub.MaxPrice(keyword)
+				go checkKeyword(keyword, maxPrice, bd, cker)
 			}
 		}
 	}
 }
 
-func checkKeyword(keyword string, bd *board.Board, cker Checker) {
+// unverifiedPriceTag marks an article that matched on its title but whose
+// asking price could not be established.
+const unverifiedPriceTag = "[價格待確認] "
+
+func checkKeyword(keyword string, maxPrice int, bd *board.Board, cker Checker) {
 	keywordArticles := make(article.Articles, 0)
 	for _, newAtcl := range bd.NewArticles {
-		if newAtcl.MatchKeyword(keyword) {
-			newAtcl.Author = ""
-			keywordArticles = append(keywordArticles, newAtcl)
+		if !newAtcl.MatchKeyword(keyword) {
+			continue
 		}
+		// The body is only read for keywords that carry a price ceiling, so a
+		// plain keyword subscription costs exactly what it did before: one
+		// listing page, no per-article request.
+		if maxPrice > 0 && !keepByPrice(&newAtcl, bd.Name, maxPrice) {
+			continue
+		}
+		newAtcl.Author = ""
+		keywordArticles = append(keywordArticles, newAtcl)
 	}
 	if len(keywordArticles) != 0 {
 		cker.keyword = keyword
@@ -234,6 +248,39 @@ func checkKeyword(keyword string, bd *board.Board, cker Checker) {
 		cker.word = keyword
 		cker.ch <- cker
 	}
+}
+
+// keepByPrice reports whether a title-matched article still warrants a
+// notification once its asking price is known, and tags its title with what was
+// found. A price that cannot be established is never a reason to stay silent:
+// missing a bargain costs the subscriber more than a notification they did not
+// need.
+func keepByPrice(atcl *article.Article, boardName string, maxPrice int) bool {
+	code := atcl.ParseCode()
+	if code == "" {
+		return true
+	}
+	info, err := price.Of(boardName, code, func() (string, error) {
+		fetched, err := web.FetchArticle(boardName, code)
+		return fetched.Content, err
+	})
+	if err != nil {
+		log.WithFields(log.Fields{
+			"board": boardName,
+			"code":  code,
+		}).WithError(err).Warn("Price Extraction Failed")
+		atcl.Title = unverifiedPriceTag + atcl.Title
+		return true
+	}
+	switch decision, matched := price.Decide(info, maxPrice); decision {
+	case price.Skip:
+		return false
+	case price.NotifyUnverified:
+		atcl.Title = unverifiedPriceTag + atcl.Title
+	case price.Notify:
+		atcl.Title = fmt.Sprintf("[%d] %s", matched, atcl.Title)
+	}
+	return true
 }
 
 func checkAuthorSubscriber(bd *board.Board, cker Checker) {

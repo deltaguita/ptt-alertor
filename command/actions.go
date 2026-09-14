@@ -146,3 +146,28 @@ func removeArticles(u *user.User, sub subscription.Subscription, inputs ...strin
 	a.RemoveSubscriber(u.Profile.Account)
 	return u.Subscribes.Remove(sub)
 }
+
+// addMaxPrice attaches a price ceiling to a keyword, subscribing to the keyword
+// first when it is not tracked yet, so a subscriber can express the whole
+// condition in one command.
+func addMaxPrice(u *user.User, sub subscription.Subscription, inputs ...string) error {
+	word, maxPrice := inputs[0], inputs[1]
+	limit, err := strconv.Atoi(maxPrice)
+	if err != nil {
+		return err
+	}
+	sub.Keywords = myutil.StringSlice{word}
+	if err := u.Subscribes.Add(sub); err != nil {
+		return err
+	}
+	if err := keyword.AddSubscriber(sub.Board, u.Profile.Account); err != nil {
+		return err
+	}
+	return u.Subscribes.SetMaxPrice(sub.Board, word, limit)
+}
+
+// removeMaxPrice drops a keyword's price ceiling, leaving the keyword itself
+// subscribed and matched on its title alone.
+func removeMaxPrice(u *user.User, sub subscription.Subscription, inputs ...string) error {
+	return u.Subscribes.SetMaxPrice(sub.Board, inputs[0], 0)
+}

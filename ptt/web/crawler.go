@@ -139,6 +139,9 @@ func FetchArticle(board, articleCode string) (article.Article, error) {
 		atcl.Title = "[內文標題已被刪除]"
 	}
 	atcl.ID = atcl.ParseID(reqURL)
+	if mainContents := findNodes(htmlNodes, findMainContentDiv); len(mainContents) > 0 {
+		atcl.Content = getMainContent(mainContents[0])
+	}
 	pushBlocks := findNodes(htmlNodes, findPushBlocks)
 	pushes := []article.Comment{}
 

@@ -30,7 +30,10 @@ type Article struct {
 	LastPushDateTime time.Time `json:"lastPushDateTime,omitempty"`
 	Board            string    `json:"board,omitempty"`
 	PushSum          int       `json:"pushSum,omitempty"`
-	drive            Driver
+	// Content is the article body. It is only filled by FetchArticle and is
+	// never persisted -- price extraction consumes it immediately.
+	Content string `json:"-"`
+	drive   Driver
 }
 
 type Driver interface {
@@ -59,6 +62,19 @@ func (a Article) ParseID(Link string) (id int) {
 		return 0
 	}
 	return id
+}
+
+var codeRegexp = regexp.MustCompile(`/bbs/[^/]+/([GM]\.\d+\.[^/]+)\.html`)
+
+// ParseCode returns the article code embedded in a board listing's link, which
+// is what identifies an article to FetchArticle. Listing pages give a link but
+// no code.
+func (a Article) ParseCode() string {
+	matches := codeRegexp.FindStringSubmatch(a.Link)
+	if len(matches) < 2 {
+		return ""
+	}
+	return matches[1]
 }
 
 func (a Article) MatchKeyword(keyword string) bool {

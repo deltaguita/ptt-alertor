@@ -33,6 +33,12 @@ func (ss Subscriptions) String() string {
 			str += sub.StringPushSum() + "\n"
 		}
 	}
+	str += "----\n售價上限\n"
+	for _, sub := range ss {
+		if sub.StringMaxPrice() != "" {
+			str += sub.StringMaxPrice() + "\n"
+		}
+	}
 	str += "----\n推文\n請輸入「推文清單」查看推文追蹤列表。"
 
 	return str
@@ -84,6 +90,32 @@ func (ss *Subscriptions) Remove(sub Subscription) error {
 		}
 	}
 	return nil
+}
+
+// SetMaxPrice attaches a price ceiling to an already subscribed keyword on a
+// board. A ceiling of zero or less removes it.
+func (ss *Subscriptions) SetMaxPrice(boardName, keyword string, maxPrice int) error {
+	for i := 0; i < len(*ss); i++ {
+		if !strings.EqualFold((*ss)[i].Board, boardName) {
+			continue
+		}
+		s := (*ss)[i]
+		s.SetMaxPrice(keyword, maxPrice)
+		(*ss)[i] = s
+		return nil
+	}
+	return SubscriptionNotFoundError{Board: boardName, Keyword: keyword}
+}
+
+// SubscriptionNotFoundError reports a price command naming a board the user does
+// not subscribe to.
+type SubscriptionNotFoundError struct {
+	Board   string
+	Keyword string
+}
+
+func (e SubscriptionNotFoundError) Error() string {
+	return "尚未訂閱 " + e.Board + " 的關鍵字「" + e.Keyword + "」"
 }
 
 func (ss *Subscriptions) Update(sub Subscription) error {
