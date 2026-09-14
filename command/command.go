@@ -126,6 +126,8 @@ func HandleCommand(text string, userID string, isUser bool) string {
 		return result
 	case "行情", "market":
 		return handleMarket(text)
+	case "重新分析":
+		return handleResurvey()
 	case "新增售價", "刪除售價":
 		result, err := handleMaxPrice(command, userID, text)
 		if err != nil {
@@ -405,6 +407,19 @@ func handleMarket(text string) string {
 		return "查詢行情失敗，請稍後再試。"
 	}
 	return dist.String()
+}
+
+// handleResurvey makes the next survey walk history again. Widening what is
+// tracked only affects listings the survey has yet to see, so without this a
+// newly tracked product would have no past -- only whatever appears from now on.
+func handleResurvey() string {
+	boards := market.Boards()
+	for _, board := range boards {
+		market.NewSurvey(board).ResetBackfill()
+	}
+	log.WithField("boards", boards).Info("Market Resurvey Requested")
+	return "已排定重新回溯：" + strings.Join(boards, ", ") +
+		"\n下次巡檢（每 6 小時）開始往回補，期間新文章照常記錄。"
 }
 
 // boardPattern matches the board list shared by every subscription command.

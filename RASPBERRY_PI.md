@@ -220,6 +220,8 @@ iPhone 17 Pro Max 256G（近 30 天, 12 筆, 其中 3 筆已售出）
 | `MARKET_SURVEY_BUDGET` | 200 | 每次執行最多抽取幾篇 |
 | `MARKET_SURVEY_PAUSE_MS` | 2000 | 每次 ptt.cc 請求間隔 |
 | `MARKET_SURVEY_DAYS` | 180 | 往回補到幾天前 |
+| `MARKET_SURVEY_BOARDS` | macshop | 要巡檢的看板，逗號分隔 |
+| `MARKET_SURVEY_PATTERN` | `(?i)i?phone\s*1[2-9]` | 標題過濾樣式。無效樣式會退回預設並記錄，不會讓服務起不來 |
 
 ### 儲存
 
@@ -227,6 +229,30 @@ iPhone 17 Pro Max 256G（近 30 天, 12 筆, 其中 3 筆已售出）
 
 選 JSONL 而非 SQLite，是因為資料量是一年約 3,650 筆——載入記憶體聚合是毫秒級，
 而 JSONL 零新依賴（`go.mod` 還在 go 1.15，引入 SQLite 要連帶升版）、可以直接用 `jq` 查、也好備份。
+
+### 持續更新與擴大追蹤範圍
+
+**每次執行都先掃最新兩頁**，所以回溯跑完之後新文章仍會每 6 小時進來一次。
+回溯完成的狀態存成 `backfillDone`，跟「從未開始」是不同的值——這兩者混為一談，
+會讓跑完的巡檢每一輪都把整個看板重走一遍。
+
+**擴大追蹤範圍不會自動補歷史。** 改了 `MARKET_SURVEY_PATTERN`、`MARKET_SURVEY_BOARDS`
+或 `MARKET_SURVEY_DAYS` 之後，巡檢只會對「之後才看到的文章」生效。要讓新追蹤的商品
+也有過去的資料，對 bot 輸入：
+
+```
+重新分析
+```
+
+這會清掉回溯進度，下次巡檢重新往回走。期間新文章照常記錄，不會中斷。
+
+**新增 iPhone 機型不用做任何事**：預設樣式的世代範圍是 `1[2-9]`，
+iPhone 18、19 上市時會自動納入。
+
+**換成非 iPhone 的品項（MacBook、iPad）需要改程式**，不是改設定就好。
+標題過濾可以用 `MARKET_SURVEY_PATTERN` 換掉，但抽取 schema 的
+`model` / `variant` / `capacity_gb` 是照手機的規格設計的——
+MacBook 要的是晶片、記憶體、SSD，那是另一組欄位，`Spec` 與 `ParseSpec` 也得跟著改。
 
 ### 兩個踩過的坑
 

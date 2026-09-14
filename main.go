@@ -155,7 +155,9 @@ func startJobs() {
 	// Every six hours rather than daily: each run is capped by its own budget,
 	// so spreading the work keeps the backfill moving without bunching the API
 	// calls or the requests to the board into one burst.
-	c.AddJob("@every 6h", market.NewSurvey("macshop"))
+	for _, board := range market.Boards() {
+		c.AddJob("@every 6h", market.NewSurvey(board))
+	}
 	c.Start()
 }
 

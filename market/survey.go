@@ -4,6 +4,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	log "github.com/Ptt-Alertor/logrus"
@@ -14,11 +15,14 @@ import (
 	"github.com/garyburd/redigo/redis"
 )
 
-// surveyTitle selects the listings worth reading. Filtering on the listing page,
-// before anything is downloaded, is what keeps the survey affordable: iPhone
-// listings are about a fifth of the board, so four in five articles cost nothing
-// beyond the index page that was fetched anyway.
-var surveyTitle = regexp.MustCompile(`(?i)i?phone\s*1[2-9]`)
+// defaultPattern selects the listings worth reading. Filtering on the listing
+// page, before anything is downloaded, is what keeps the survey affordable:
+// iPhone listings are about a fifth of the board, so four in five articles cost
+// nothing beyond the index page that was fetched anyway.
+//
+// The generation range runs to 19, so a model released later is picked up
+// without a change here.
+const defaultPattern = `(?i)i?phone\s*1[2-9]`
 
 // surveyPrefix keeps announcements and reviews out; only listings and want-ads
 // carry a price.
@@ -42,6 +46,10 @@ type Survey struct {
 	Budget   int
 	Pause    time.Duration
 	Boundary time.Duration
+	// Pattern selects which listings to read. Widening it does not backfill by
+	// itself -- history already walked is not walked again -- so ResetBackfill
+	// is what makes the survey revisit the past for newly matched listings.
+	Pattern *regexp.Regexp
 }
 
 // NewSurvey builds a survey from the environment.
@@ -51,6 +59,57 @@ func NewSurvey(board string) *Survey {
 		Budget:   envInt("MARKET_SURVEY_BUDGET", defaultBudget),
 		Pause:    time.Duration(envInt("MARKET_SURVEY_PAUSE_MS", int(defaultPause/time.Millisecond))) * time.Millisecond,
 		Boundary: time.Duration(envInt("MARKET_SURVEY_DAYS", int(defaultBoundary.Hours()/24))) * 24 * time.Hour,
+		Pattern:  envPattern("MARKET_SURVEY_PATTERN"),
+	}
+}
+
+// Boards reports the boards to survey, from MARKET_SURVEY_BOARDS.
+func Boards() []string {
+	configured := strings.Split(os.Getenv("MARKET_SURVEY_BOARDS"), ",")
+	boards := make([]string, 0, len(configured))
+	for _, board := range configured {
+		if board = strings.TrimSpace(board); board != "" {
+			boards = append(boards, board)
+		}
+	}
+	if len(boards) == 0 {
+		return []string{"macshop"}
+	}
+	return boards
+}
+
+// envPattern compiles an override, falling back to the default rather than
+// failing to start: a typo in configuration should narrow nothing silently, and
+// the log says which pattern is in force.
+func envPattern(name string) *regexp.Regexp {
+	value := os.Getenv(name)
+	if value == "" {
+		return regexp.MustCompile(defaultPattern)
+	}
+	pattern, err := regexp.Compile(value)
+	if err != nil {
+		log.WithField(name, value).WithError(err).
+			Error("Market Survey Pattern Invalid, Using Default")
+		return regexp.MustCompile(defaultPattern)
+	}
+	return pattern
+}
+
+func (s *Survey) titlePattern() *regexp.Regexp {
+	if s.Pattern == nil {
+		return regexp.MustCompile(defaultPattern)
+	}
+	return s.Pattern
+}
+
+// ResetBackfill makes the next run walk history again from the newest pages.
+// Widening the pattern or the boundary only affects listings the survey has yet
+// to see, so this is what gives a newly tracked product its past.
+func (s *Survey) ResetBackfill() {
+	conn := connections.Redis()
+	defer conn.Close()
+	if _, err := conn.Do("DEL", s.resumeKey()); err != nil {
+		log.WithError(err).Error("Market Survey Could Not Reset Progress")
 	}
 }
 
@@ -61,6 +120,13 @@ func envInt(name string, fallback int) int {
 	}
 	return value
 }
+
+// backfillDone stands in for a page number once the walk has reached the
+// boundary. It has to be distinguishable from an absent key: treating "finished"
+// as "never started" sends every later run back over the whole history, which
+// costs nothing in extractions -- every article is already recorded -- but
+// re-fetches hundreds of listing pages to discover that.
+const backfillDone = -1
 
 // Run implements cron.Job.
 func (s *Survey) Run() {
@@ -76,47 +142,62 @@ func (s *Survey) Run() {
 	}
 
 	budget := s.Budget
-	// The two newest pages are where anything new appears.
+	// The two newest pages are where anything new appears, so they are worked
+	// first on every run: the recent picture stays current even while a backfill
+	// is still grinding through history.
 	for page := newest; page > newest-2 && budget > 0; page-- {
-		budget -= s.scanPage(page, seen, budget)
-	}
-	if budget <= 0 {
-		return
+		spent, _, _ := s.scanPage(page, seen, budget)
+		budget -= spent
 	}
 
-	next := s.resumePage(newest)
+	next, done := s.resumePage(newest)
+	if done || budget <= 0 {
+		return
+	}
 	for ; next > 0 && budget > 0; next-- {
-		if s.pageIsOlderThanBoundary(next) {
-			log.WithField("board", s.Board).Info("Market Survey Reached Boundary")
-			s.saveResumePage(0)
+		spent, newestOnPage, ok := s.scanPage(next, seen, budget)
+		budget -= spent
+		// The boundary is judged from the page just read rather than by fetching
+		// it again.
+		if ok && newestOnPage.Before(time.Now().Add(-s.Boundary)) {
+			log.WithFields(log.Fields{"board": s.Board, "page": next}).
+				Info("Market Survey Reached Boundary")
+			s.saveResumePage(backfillDone)
 			return
 		}
-		budget -= s.scanPage(next, seen, budget)
 	}
 	s.saveResumePage(next)
 }
 
-// scanPage records what one listing page offers, returning how much budget it
-// used.
-func (s *Survey) scanPage(page int, seen map[string]bool, budget int) int {
+// scanPage records what one listing page offers. It returns how much budget it
+// used, when the newest article on the page was posted, and whether the page
+// could be read at all.
+func (s *Survey) scanPage(page int, seen map[string]bool, budget int) (int, time.Time, bool) {
 	time.Sleep(s.Pause)
 	articles, err := web.FetchArticles(s.Board, page)
 	if err != nil {
 		log.WithFields(log.Fields{"board": s.Board, "page": page}).WithError(err).
 			Warn("Market Survey Page Failed")
-		return 0
+		return 0, time.Time{}, false
 	}
 	spent := 0
+	newestOnPage := time.Time{}
 	records := make([]Record, 0)
 	for _, listed := range articles {
-		if spent >= budget {
-			break
-		}
-		if !surveyPrefix.MatchString(listed.Title) || !surveyTitle.MatchString(listed.Title) {
+		code := listed.ParseCode()
+		if code == "" {
 			continue
 		}
-		code := listed.ParseCode()
-		if code == "" || seen[code] {
+		if posted := postedAt(code); posted.After(newestOnPage) {
+			newestOnPage = posted
+		}
+		if spent >= budget {
+			continue
+		}
+		if !surveyPrefix.MatchString(listed.Title) || !s.titlePattern().MatchString(listed.Title) {
+			continue
+		}
+		if seen[code] {
 			continue
 		}
 		spent++
@@ -127,7 +208,7 @@ func (s *Survey) scanPage(page int, seen map[string]bool, budget int) int {
 	if err := Append(records); err != nil {
 		log.WithError(err).Error("Market Survey Could Not Save Records")
 	}
-	return spent
+	return spent, newestOnPage, true
 }
 
 func (s *Survey) read(listed article.Article, code string) []Record {
@@ -178,32 +259,32 @@ func postedAt(code string) time.Time {
 	return time.Unix(seconds, 0)
 }
 
-func (s *Survey) pageIsOlderThanBoundary(page int) bool {
-	articles, err := web.FetchArticles(s.Board, page)
-	if err != nil || len(articles) == 0 {
-		return false
-	}
-	newestOnPage := time.Time{}
-	for _, listed := range articles {
-		if posted := postedAt(listed.ParseCode()); posted.After(newestOnPage) {
-			newestOnPage = posted
-		}
-	}
-	return newestOnPage.Before(time.Now().Add(-s.Boundary))
-}
-
 func (s *Survey) resumeKey() string { return "market:survey:" + s.Board + ":page" }
 
-// resumePage reports where the last run stopped walking backwards, defaulting to
-// just behind the newest pages on a first run.
-func (s *Survey) resumePage(newest int) int {
+// resumePage reports where the last run stopped walking backwards and whether
+// the walk has already reached the boundary. A first run starts just behind the
+// newest pages.
+func (s *Survey) resumePage(newest int) (int, bool) {
 	conn := connections.Redis()
 	defer conn.Close()
 	page, err := redis.Int(conn.Do("GET", s.resumeKey()))
-	if err != nil || page <= 0 {
-		return newest - 2
+	return resumeFrom(page, err == nil, newest)
+}
+
+// resumeFrom interprets stored progress. Finished and never-started have to lead
+// to different places: conflating them is what made a completed survey walk the
+// whole board again on every run.
+func resumeFrom(stored int, found bool, newest int) (int, bool) {
+	switch {
+	case !found:
+		return newest - 2, false
+	case stored == backfillDone:
+		return 0, true
+	case stored <= 0:
+		return newest - 2, false
+	default:
+		return stored, false
 	}
-	return page
 }
 
 func (s *Survey) saveResumePage(page int) {
