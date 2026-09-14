@@ -1,62 +1,93 @@
 package market
 
 import (
+	"regexp"
 	"testing"
 	"time"
+
+	"github.com/Ptt-Alertor/ptt-alertor/price"
 )
 
-func rec(author, model, variant string, capacity, price int, daysAgo int) Record {
+// testKind is a deliberately minimal kind: two grouping attributes, one of them
+// required to identify a unit. It keeps these tests about the shared machinery
+// rather than about any real product.
+type testKind struct{}
+
+func (testKind) Name() string                       { return "test" }
+func (testKind) AttrSchema() map[string]interface{} { return map[string]interface{}{} }
+func (testKind) PromptRules() string                { return "" }
+func (testKind) TitlePattern() *regexp.Regexp       { return regexp.MustCompile(`widget`) }
+func (testKind) Attrs(price.Item) (Attrs, bool)     { return nil, false }
+func (testKind) ParseQuery(string) Attrs            { return nil }
+func (testKind) Label(a Attrs) string               { return "widget " + a.Get("size") }
+func (testKind) GroupBy() []string                  { return []string{"size", "colour"} }
+func (testKind) AttrLabel(name string) string       { return "測試" + name }
+func (testKind) AttrValue(_, value string) string   { return value + "!" }
+func (testKind) DedupeKey(a Attrs) (string, bool) {
+	if !a.Has("size", "colour") {
+		return "", false
+	}
+	return a.Get("size") + "|" + a.Get("colour"), true
+}
+
+func rec(author, size, colour string, price, daysAgo int) Record {
+	attrs := Attrs{}
+	if size != "" {
+		attrs["size"] = size
+	}
+	if colour != "" {
+		attrs["colour"] = colour
+	}
 	return Record{
-		Author: author, Model: model, Variant: variant, CapacityGB: capacity,
-		Price: price, PostType: "販售",
-		Code:     author + "-" + time.Now().AddDate(0, 0, -daysAgo).Format("0102"),
+		Kind: "test", Author: author, Attrs: attrs, Price: price, PostType: "販售",
+		Code:     author + "-" + time.Now().AddDate(0, 0, -daysAgo).Format("0102150405"),
 		PostedAt: time.Now().AddDate(0, 0, -daysAgo),
 	}
 }
 
 func TestDedupeKeepsLatestPerSellerAndSpec(t *testing.T) {
 	records := []Record{
-		rec("seart", "17", "Pro Max", 256, 39300, 17),
-		rec("seart", "17", "Pro Max", 256, 40000, 3), // relist, 14 days later
-		rec("other", "17", "Pro Max", 256, 38000, 5),
+		rec("seart", "L", "red", 39300, 17),
+		rec("seart", "L", "red", 40000, 3), // relist, 14 days later
+		rec("other", "L", "red", 38000, 5),
 	}
-	got := Dedupe(records)
+	got := Dedupe(testKind{}, records)
 	if len(got) != 2 {
-		t.Fatalf("Dedupe() kept %d records, want 2: %+v", len(got), got)
+		t.Fatalf("Dedupe() kept %d records, want 2", len(got))
 	}
 	for _, record := range got {
 		if record.Author == "seart" && record.Price != 40000 {
-			t.Errorf("kept price %d for relisted seller, want the latest 40000", record.Price)
+			t.Errorf("kept %d for a relisted seller, want the latest 40000", record.Price)
 		}
 	}
 }
 
-func TestDedupeKeepsUnknownCapacityApart(t *testing.T) {
-	// Two listings by one seller with no capacity stated are not evidence of a
-	// relist -- the board's ten-day rule means same-day pairs are different items.
+func TestDedupeLeavesUnidentifiableRecordsAlone(t *testing.T) {
+	// Without every identifying attribute the kind refuses to merge, so two
+	// listings by one seller stay two listings.
 	records := []Record{
-		rec("jkb6", "17", "Pro", 0, 30000, 4),
-		rec("jkb6", "17", "Pro", 0, 31000, 3),
+		rec("jkb6", "L", "", 30000, 4),
+		rec("jkb6", "L", "", 31000, 3),
 	}
-	if got := Dedupe(records); len(got) != 2 {
-		t.Errorf("Dedupe() merged unknown-capacity listings, kept %d want 2", len(got))
+	if got := Dedupe(testKind{}, records); len(got) != 2 {
+		t.Errorf("Dedupe() merged unidentifiable listings, kept %d want 2", len(got))
 	}
 }
 
 func TestDescribe(t *testing.T) {
 	records := []Record{
-		rec("a", "17", "Pro Max", 256, 36000, 5),
-		rec("b", "17", "Pro Max", 256, 36500, 4),
-		rec("c", "17", "Pro Max", 256, 40500, 3),
-		rec("d", "17", "Pro Max", 256, 34000, 2),
-		rec("e", "17", "Pro", 256, 29000, 2),     // different variant
-		rec("f", "17", "Pro Max", 256, 1000, 90), // outside the window
+		rec("a", "L", "red", 36000, 5),
+		rec("b", "L", "red", 36500, 4),
+		rec("c", "L", "red", 40500, 3),
+		rec("d", "L", "red", 34000, 2),
+		rec("e", "M", "red", 29000, 2), // different size
+		rec("f", "L", "red", 1000, 90), // outside the window
 	}
 	records[3].Sold = true
-	dist := Describe(records, Spec{Model: "17", Variant: "Pro Max", CapacityGB: 256}, 30*24*time.Hour)
+	dist := Describe(testKind{}, records, Attrs{"size": "L"}, 30*24*time.Hour)
 
 	if dist.Count != 4 {
-		t.Errorf("Count = %d, want 4 (Pro excluded, stale excluded)", dist.Count)
+		t.Errorf("Count = %d, want 4 (other size excluded, stale excluded)", dist.Count)
 	}
 	if dist.Sold != 1 {
 		t.Errorf("Sold = %d, want 1", dist.Sold)
@@ -77,15 +108,67 @@ func TestDescribe(t *testing.T) {
 	}
 }
 
+func TestDescribeReportsWhatAnOpenQuerySpans(t *testing.T) {
+	records := []Record{
+		rec("a", "L", "red", 36000, 5),
+		rec("b", "L", "blue", 40500, 4),
+		rec("c", "L", "red", 34000, 3),
+	}
+	dist := Describe(testKind{}, records, Attrs{"size": "L"}, 30*24*time.Hour)
+	if got := dist.Spread["colour"]; len(got) != 2 {
+		t.Errorf("Spread[colour] = %v, want both colours reported", got)
+	}
+	if _, reported := dist.Spread["size"]; reported {
+		t.Error("Spread reported the attribute the query pinned")
+	}
+}
+
 func TestDescribeExcludesWantAds(t *testing.T) {
 	records := []Record{
-		rec("a", "17", "Pro", 256, 29000, 2),
-		rec("b", "17", "Pro", 256, 25000, 2),
+		rec("a", "L", "red", 29000, 2),
+		rec("b", "L", "red", 25000, 2),
 	}
 	records[1].PostType = "徵求"
-	dist := Describe(records, Spec{Model: "17", Variant: "Pro", CapacityGB: 256}, 30*24*time.Hour)
+	dist := Describe(testKind{}, records, Attrs{"size": "L"}, 30*24*time.Hour)
 	if dist.Count != 1 || dist.Median != 29000 {
-		t.Errorf("want-ad leaked into distribution: count=%d median=%d", dist.Count, dist.Median)
+		t.Errorf("want-ad leaked in: count=%d median=%d", dist.Count, dist.Median)
+	}
+}
+
+func TestDescribeIgnoresOtherKinds(t *testing.T) {
+	records := []Record{rec("a", "L", "red", 29000, 2), rec("b", "L", "red", 1, 2)}
+	records[1].Kind = "something-else"
+	if dist := Describe(testKind{}, records, Attrs{"size": "L"}, 30*24*time.Hour); dist.Count != 1 {
+		t.Errorf("Count = %d, want 1: another kind's records leaked in", dist.Count)
+	}
+}
+
+func TestGroupingOfDropsDescriptiveAttributes(t *testing.T) {
+	// Comparing on a descriptive attribute would match only items in identical
+	// condition, which is almost never anything.
+	attrs := Attrs{"size": "L", "colour": "red", "wear": "light"}
+	got := GroupingOf(testKind{}, attrs)
+	if len(got) != 2 || got.Get("size") != "L" || got.Get("colour") != "red" {
+		t.Errorf("GroupingOf() = %v, want only the grouping attributes", got)
+	}
+}
+
+func TestAttrsMatches(t *testing.T) {
+	attrs := Attrs{"size": "L", "colour": "Red"}
+	for _, tt := range []struct {
+		query Attrs
+		want  bool
+	}{
+		{Attrs{}, true},
+		{Attrs{"size": "L"}, true},
+		{Attrs{"colour": "red"}, true}, // case-insensitive
+		{Attrs{"size": "M"}, false},
+		{Attrs{"size": "L", "colour": "blue"}, false},
+		{Attrs{"size": ""}, true}, // an empty value means "any"
+	} {
+		if got := attrs.Matches(tt.query); got != tt.want {
+			t.Errorf("Matches(%v) = %v, want %v", tt.query, got, tt.want)
+		}
 	}
 }
 

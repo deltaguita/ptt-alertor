@@ -29,7 +29,7 @@ func TestIntegrationExtract(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info, err := Of("MacShop", tt.code, func() (string, error) {
+			info, err := Of(testKind{}, "MacShop", tt.code, func() (string, error) {
 				a, err := web.FetchArticle("MacShop", tt.code)
 				return a.Content, err
 			})

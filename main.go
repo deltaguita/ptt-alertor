@@ -13,6 +13,9 @@ import (
 	"github.com/robfig/cron"
 
 	"github.com/Ptt-Alertor/ptt-alertor/market"
+	// Registers the iPhone kind. Tracking another class of goods is a matter of
+	// writing its package and adding it here.
+	_ "github.com/Ptt-Alertor/ptt-alertor/market/kinds/iphone"
 
 	"github.com/Ptt-Alertor/ptt-alertor/channels/line"
 	"github.com/Ptt-Alertor/ptt-alertor/channels/messenger"

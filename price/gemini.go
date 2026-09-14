@@ -20,10 +20,11 @@ const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/"
 // costs tokens.
 const maxContentRunes = 4000
 
-// prompt states the rules a schema cannot: which number on the page is the
+// basePrompt states the rules a schema cannot: which number on the page is the
 // asking price. Every clause answers a way real articles mislead a reader that
-// only looks for digits near "售價".
-const prompt = `你是 PTT 二手交易看板的資訊抽取器。只抽取文章中「明確寫出」的資訊，不要推測、不要估價、不要計算行情。
+// only looks for digits near "售價". A Kind appends the rules for its own
+// attributes.
+const basePrompt = `你是 PTT 二手交易看板的資訊抽取器。只抽取文章中「明確寫出」的資訊，不要推測、不要估價、不要計算行情。
 
 1. price 是賣家的「售價/開價」，新台幣整數。
    - 不要抓原價、官網價、定價、建議售價、購入價
@@ -34,50 +35,43 @@ const prompt = `你是 PTT 二手交易看板的資訊抽取器。只抽取文�
 4. is_sold：出現「已售出」「已售」「已結案」「完售」等字樣則為 true。
 5. post_type：販售 / 徵求 / 其他。徵求文的金額是預算，仍填入 price。
 6. 任何一個價格無法確定時，confidence 填 low，不要猜數字。
-7. 商品是 iPhone 手機本體時才填寫下列欄位。
-   保護殼、保護貼、充電器、轉接線、耳機等配件**不是手機本體**，
-   即使名稱裡有「iPhone 16」也一律把 model 留空。
-   - model：世代數字，例如 "17"、"16"。不是 iPhone 手機本體就留空。
-   - variant：Pro Max / Pro / Plus / 無。注意「17 Pro Max」的 variant 是 Pro Max 不是 Pro。
-   - capacity_gb：容量的 GB 數，1TB 填 1024、2TB 填 2048。沒寫就留 0。
-   - battery_health：電池健康度百分比的數字，沒寫就留 0。全新未拆可填 100。
-
-文章：`
+`
 
 // responseSchema constrains the reply to the shape of Info, so the answer never
-// has to be recovered from prose.
-var responseSchema = map[string]interface{}{
-	"type": "object",
-	"properties": map[string]interface{}{
-		"post_type": map[string]interface{}{
-			"type": "string",
-			"enum": []string{PostTypeSale, PostTypeWanted, "其他"},
-		},
-		"is_sold": map[string]interface{}{"type": "boolean"},
-		"items": map[string]interface{}{
-			"type": "array",
+// has to be recovered from prose. The kind's attributes are grafted onto each
+// item, which is the only part that varies between classes of goods.
+func responseSchema(kind Kind) map[string]interface{} {
+	attrs := map[string]interface{}{
+		"type":       "object",
+		"properties": kind.AttrSchema(),
+	}
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"post_type": map[string]interface{}{
+				"type": "string",
+				"enum": []string{PostTypeSale, PostTypeWanted, "其他"},
+			},
+			"is_sold": map[string]interface{}{"type": "boolean"},
 			"items": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name":  map[string]interface{}{"type": "string"},
-					"price": map[string]interface{}{"type": "integer"},
-					"model": map[string]interface{}{"type": "string"},
-					"variant": map[string]interface{}{
-						"type": "string",
-						"enum": []string{VariantProMax, VariantPro, VariantPlus, VariantBase},
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name":  map[string]interface{}{"type": "string"},
+						"price": map[string]interface{}{"type": "integer"},
+						"attrs": attrs,
 					},
-					"capacity_gb":    map[string]interface{}{"type": "integer"},
-					"battery_health": map[string]interface{}{"type": "integer"},
+					"required": []string{"name", "price"},
 				},
-				"required": []string{"name", "price"},
+			},
+			"confidence": map[string]interface{}{
+				"type": "string",
+				"enum": []string{ConfidenceHigh, ConfidenceLow},
 			},
 		},
-		"confidence": map[string]interface{}{
-			"type": "string",
-			"enum": []string{ConfidenceHigh, ConfidenceLow},
-		},
-	},
-	"required": []string{"post_type", "is_sold", "items", "confidence"},
+		"required": []string{"post_type", "is_sold", "items", "confidence"},
+	}
 }
 
 // ErrNoAPIKey is returned when GEMINI_API_KEY is unset. Callers treat it like
@@ -136,8 +130,8 @@ type geminiResponse struct {
 	} `json:"error"`
 }
 
-// Extract asks Gemini to read one article body.
-func (g *Gemini) Extract(content string) (Info, error) {
+// Extract asks Gemini to read one article body for the attributes a kind needs.
+func (g *Gemini) Extract(content string, kind Kind) (Info, error) {
 	if g.APIKey == "" {
 		return Info{}, ErrNoAPIKey
 	}
@@ -147,10 +141,12 @@ func (g *Gemini) Extract(content string) (Info, error) {
 
 	// Temperature 0: extraction should be reproducible, not inventive.
 	body, err := json.Marshal(geminiRequest{
-		Contents: []geminiContent{{Parts: []geminiPart{{Text: prompt + content}}}},
+		Contents: []geminiContent{{Parts: []geminiPart{
+			{Text: basePrompt + kind.PromptRules() + "\n文章：" + content},
+		}}},
 		Config: geminiConfig{
 			ResponseMIMEType: "application/json",
-			ResponseSchema:   responseSchema,
+			ResponseSchema:   responseSchema(kind),
 			Temperature:      0,
 		},
 	})

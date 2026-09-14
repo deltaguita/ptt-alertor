@@ -397,11 +397,11 @@ func handleMarket(text string) string {
 	if query == "" {
 		return "請指定機型。範例：行情 iPhone 17 Pro Max 256"
 	}
-	spec := market.ParseSpec(query)
-	if spec.Model == "" {
-		return "看不出機型。範例：行情 iPhone 17 Pro Max 256"
+	kind, attrs, ok := market.KindFor(query)
+	if !ok {
+		return "看不出商品。範例：行情 iPhone 17 Pro Max 256"
 	}
-	dist, err := market.Query(spec, market.DefaultWindow)
+	dist, err := market.Query(kind, attrs, market.DefaultWindow)
 	if err != nil {
 		log.WithError(err).Error("Market Query Failed")
 		return "查詢行情失敗，請稍後再試。"

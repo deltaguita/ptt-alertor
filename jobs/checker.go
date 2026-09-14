@@ -262,7 +262,14 @@ func keepByPrice(atcl *article.Article, boardName string, maxPrice int) bool {
 	if code == "" {
 		return true
 	}
-	info, err := price.Of(boardName, code, func() (string, error) {
+	// A kind that recognises the title is asked for its own attributes, so the
+	// alert can be set against the market for that exact product. Anything else
+	// is priced and nothing more.
+	kind, recognised := market.KindForTitle(atcl.Title)
+	if !recognised {
+		kind = market.Plain
+	}
+	info, err := price.Of(kind, boardName, code, func() (string, error) {
 		fetched, err := web.FetchArticle(boardName, code)
 		return fetched.Content, err
 	})
@@ -282,13 +289,12 @@ func keepByPrice(atcl *article.Article, boardName string, maxPrice int) bool {
 	case price.Notify:
 		atcl.Title = fmt.Sprintf("[%s] %s", myutil.Comma(matched.Price), atcl.Title)
 		// The market line is what turns a price into a judgement: 36,000 means
-		// nothing until it is set against what the same phone has been asking.
-		if against := market.Compare(market.Spec{
-			Model:      matched.Model,
-			Variant:    matched.Variant,
-			CapacityGB: matched.CapacityGB,
-		}, matched.Price); against != "" {
-			atcl.Title += "\r\n" + against
+		// nothing until it is set against what the same product has been asking.
+		if attrs, ok := kind.Attrs(matched); ok {
+			against := market.Compare(kind, market.GroupingOf(kind, attrs), matched.Price)
+			if against != "" {
+				atcl.Title += "\r\n" + against
+			}
 		}
 	}
 	return true

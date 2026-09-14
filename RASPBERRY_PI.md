@@ -249,10 +249,37 @@ iPhone 17 Pro Max 256G（近 30 天, 12 筆, 其中 3 筆已售出）
 **新增 iPhone 機型不用做任何事**：預設樣式的世代範圍是 `1[2-9]`，
 iPhone 18、19 上市時會自動納入。
 
-**換成非 iPhone 的品項（MacBook、iPad）需要改程式**，不是改設定就好。
-標題過濾可以用 `MARKET_SURVEY_PATTERN` 換掉，但抽取 schema 的
-`model` / `variant` / `capacity_gb` 是照手機的規格設計的——
-MacBook 要的是晶片、記憶體、SSD，那是另一組欄位，`Spec` 與 `ParseSpec` 也得跟著改。
+**換成非 iPhone 的品項（MacBook、iPad）需要寫一個新的 kind 模組**，見下一節。
+
+### 加一種新商品：寫一個 kind 模組
+
+底層與品項是分開的。`market` 負責儲存、掃描、額度、續跑、去重、統計——這些對任何商品都一樣；
+`price` 負責快取、singleflight、呼叫 Gemini。兩者都不知道 iPhone 的存在。
+
+品項專屬的部分全部收在一個 `Kind` 裡（`market/kinds/iphone/`），要實作的就這九個方法：
+
+| 方法 | 職責 |
+|---|---|
+| `Name` | 識別名，會進快取 key |
+| `TitlePattern` | 列表頁過濾，決定成本 |
+| `AttrSchema` / `PromptRules` | 要 Gemini 抽哪些屬性、怎麼抽 |
+| `Attrs` | 把抽出的 item 轉成記錄屬性，並判斷「這是不是我這類商品」 |
+| `ParseQuery` | 解析使用者輸入的查詢 |
+| `Label` | 顯示成商品名 |
+| `DedupeKey` | 什麼算「同一台」 |
+| `GroupBy` | 統計依哪些屬性分組 |
+| `AttrLabel` / `AttrValue` | 屬性的顯示名稱與值格式 |
+
+寫好之後在 `main.go` 加一行 import 即可，`init()` 會自我註冊：
+
+```go
+_ "github.com/Ptt-Alertor/ptt-alertor/market/kinds/macbook"
+```
+
+`market` 永遠不需要知道任何商品的名字。一次巡檢服務所有 kind——列表頁反正都要抓，
+只有某個 kind 的標題樣式命中時才會下載那篇文章。
+
+新 kind 上線後記得對 bot 輸入 `重新分析`，否則它只會有從今天開始的資料。
 
 ### 兩個踩過的坑
 
@@ -260,6 +287,15 @@ MacBook 要的是晶片、記憶體、SSD，那是另一組欄位，`Spec` 與 `
 標題比對會命中，抽取也會把它標成 `model: 16`——三個顏色就是三筆 699 的假資料，
 足以把 iPhone 16 的中位數拉垮一個數量級。兩道防線：prompt 明確排除配件，
 且**行情樣本必須有容量**（板規要求手機本體標型號，保護殼沒有容量）。
+
+**抽取屬性不能只信 LLM。** 把屬性從 item 的頂層欄位改成巢狀的 `attrs` 之後，
+模型開始漏填 `capacity`——12 篇裡只有 1 篇有，其餘全被「必須有容量」的規則擋掉，
+記錄數從 11 筆掉到 1 筆。但商品名稱裡明明寫著 `256G`。
+
+修法是分工：**模型負責判斷「這是不是手機」**（它對配件回傳空 `attrs`，這點很準），
+**細節則從名稱補齊**（`ParseQuery(item.Name)`）。名稱補不上的才算缺。
+反過來也有價值——`iphone 17 pm 256` 的 `pm` 是 Pro Max，這是樣式比對做不到而模型做得到的，
+所以 variant 以模型的答案優先。
 
 **賣家會改文章。** 實測抓到一篇 `※ 編輯: ... 09/14 14:37`，售價從 36800 改成 36000。
 所以抽取快取的 TTL 依文章年齡而定：7 天內的文章只快取 6 小時（還在改價），

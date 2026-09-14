@@ -1,9 +1,6 @@
 package market
 
-import (
-	"regexp"
-	"testing"
-)
+import "testing"
 
 func TestResumeFrom(t *testing.T) {
 	const newest = 4004
@@ -27,34 +24,6 @@ func TestResumeFrom(t *testing.T) {
 					tt.stored, tt.found, page, done, tt.wantPage, tt.wantDone)
 			}
 		})
-	}
-}
-
-func TestDefaultPatternMatchesPhonesNotAccessoriesByName(t *testing.T) {
-	pattern := regexp.MustCompile(defaultPattern)
-	for _, title := range []string{
-		"[販售] 台北 iPhone 17 Pro Max 256G 橘色",
-		"[販售] 新竹 iphone 16 pro 128g",
-		"[販售] 台中 iPhone 19 Pro", // a generation that does not exist yet
-	} {
-		if !pattern.MatchString(title) {
-			t.Errorf("pattern missed %q", title)
-		}
-	}
-	for _, title := range []string{
-		"[販售] 全國 AirPods 4 (ANC)",
-		"[販售] 桃園 Mac mini M4 16/512",
-	} {
-		if pattern.MatchString(title) {
-			t.Errorf("pattern matched non-phone %q", title)
-		}
-	}
-}
-
-func TestEnvPatternFallsBackOnGarbage(t *testing.T) {
-	t.Setenv("MARKET_SURVEY_PATTERN", "([unclosed")
-	if got := envPattern("MARKET_SURVEY_PATTERN").String(); got != defaultPattern {
-		t.Errorf("envPattern() = %q, want the default after an invalid pattern", got)
 	}
 }
 

@@ -71,23 +71,13 @@ const (
 type Item struct {
 	Name  string `json:"name"`
 	Price int    `json:"price"`
-	// Model is the phone generation as a bare number ("17"), empty for anything
-	// that is not an iPhone. Variant, CapacityGB and BatteryHealth are likewise
-	// zero when the article does not say.
-	Model         string `json:"model,omitempty"`
-	Variant       string `json:"variant,omitempty"`
-	CapacityGB    int    `json:"capacity_gb,omitempty"`
-	BatteryHealth int    `json:"battery_health,omitempty"`
+	// Attrs holds whatever the caller's Kind asked the extractor to fill in --
+	// generation and capacity for a phone, chip and memory for a laptop. They
+	// are carried as strings so that this package needs to know nothing about
+	// any particular class of goods; the Kind that asked for them is what
+	// validates and normalises them.
+	Attrs map[string]string `json:"attrs,omitempty"`
 }
-
-// Variants an item may carry. Order matters when classifying from a title:
-// "17 Pro Max" contains "Pro", so Pro Max has to be tested first.
-const (
-	VariantProMax = "Pro Max"
-	VariantPro    = "Pro"
-	VariantPlus   = "Plus"
-	VariantBase   = "無"
-)
 
 // Info is what the extractor reports about an article.
 type Info struct {
@@ -97,9 +87,21 @@ type Info struct {
 	Confidence string `json:"confidence"`
 }
 
+// Kind is what a caller must supply to have an article read: the attributes it
+// wants filled in, and the rules that tell the extractor how to fill them.
+type Kind interface {
+	// Name identifies the kind in cache keys, so that widening what a kind asks
+	// for cannot be served a reply made under the old rules.
+	Name() string
+	// AttrSchema returns the JSON-schema properties for this kind's attributes.
+	AttrSchema() map[string]interface{}
+	// PromptRules are the sentences appended to the shared extraction rules.
+	PromptRules() string
+}
+
 // Extractor reports the trade information described by an article body.
 type Extractor interface {
-	Extract(content string) (Info, error)
+	Extract(content string, kind Kind) (Info, error)
 }
 
 // extractor is swapped out in tests.
@@ -167,12 +169,12 @@ var (
 // subscribers' keywords match the same article at the same moment: a board check
 // runs one goroutine per keyword per subscriber, so without this the same
 // article would be downloaded and extracted once per match.
-func Of(board, code string, fetchContent func() (string, error)) (Info, error) {
-	if info, ok := lookup(board, code); ok {
+func Of(kind Kind, board, code string, fetchContent func() (string, error)) (Info, error) {
+	if info, ok := lookup(kind, board, code); ok {
 		return info, nil
 	}
 
-	key := cacheKey(board, code)
+	key := cacheKey(kind, board, code)
 	flightsMu.Lock()
 	if inFlight, ok := flights[key]; ok {
 		flightsMu.Unlock()
@@ -184,7 +186,7 @@ func Of(board, code string, fetchContent func() (string, error)) (Info, error) {
 	flights[key] = current
 	flightsMu.Unlock()
 
-	current.info, current.err = fetchAndExtract(board, code, fetchContent)
+	current.info, current.err = fetchAndExtract(kind, board, code, fetchContent)
 
 	flightsMu.Lock()
 	delete(flights, key)
@@ -194,36 +196,38 @@ func Of(board, code string, fetchContent func() (string, error)) (Info, error) {
 	return current.info, current.err
 }
 
-func fetchAndExtract(board, code string, fetchContent func() (string, error)) (Info, error) {
+func fetchAndExtract(kind Kind, board, code string, fetchContent func() (string, error)) (Info, error) {
 	// Re-check: a caller that waited on an earlier flight for this article may
 	// have already stored the answer.
-	if info, ok := lookup(board, code); ok {
+	if info, ok := lookup(kind, board, code); ok {
 		return info, nil
 	}
 	content, err := fetchContent()
 	if err != nil {
 		return Info{}, err
 	}
-	info, err := extractor.Extract(content)
+	info, err := extractor.Extract(content, kind)
 	if err != nil {
 		return Info{}, err
 	}
-	store(board, code, info)
+	store(kind, board, code, info)
 	return info, nil
 }
 
-// cacheKey carries a version that covers both the stored shape and the rules the
-// extraction was made under. Bump it whenever either changes: an entry written
-// before accessories were excluded still claims a phone case is an iPhone 16,
-// and a stale hit like that is silently wrong rather than merely missing.
-func cacheKey(board, code string) string {
-	return "price:v3:" + board + ":" + code
+// cacheKey carries a version and the kind that produced the entry. The version
+// covers both the stored shape and the rules the extraction was made under --
+// an entry written before accessories were excluded still claims a phone case is
+// an iPhone 16, and a stale hit like that is silently wrong rather than merely
+// missing. The kind keeps two kinds reading the same board from serving each
+// other answers shaped for different attributes.
+func cacheKey(kind Kind, board, code string) string {
+	return "price:v4:" + kind.Name() + ":" + board + ":" + code
 }
 
-func lookup(board, code string) (Info, bool) {
+func lookup(kind Kind, board, code string) (Info, bool) {
 	conn := connections.Redis()
 	defer conn.Close()
-	cached, err := redis.Bytes(conn.Do("GET", cacheKey(board, code)))
+	cached, err := redis.Bytes(conn.Do("GET", cacheKey(kind, board, code)))
 	if err != nil {
 		if err != redis.ErrNil {
 			log.WithError(err).Error("Price Cache Read Failed")
@@ -238,7 +242,7 @@ func lookup(board, code string) (Info, bool) {
 	return info, true
 }
 
-func store(board, code string, info Info) {
+func store(kind Kind, board, code string, info Info) {
 	encoded, err := json.Marshal(info)
 	if err != nil {
 		log.WithError(err).Error("Price Cache Encode Failed")
@@ -246,7 +250,7 @@ func store(board, code string, info Info) {
 	}
 	conn := connections.Redis()
 	defer conn.Close()
-	if _, err := conn.Do("SET", cacheKey(board, code), encoded, "EX", int(ttlFor(code).Seconds())); err != nil {
+	if _, err := conn.Do("SET", cacheKey(kind, board, code), encoded, "EX", int(ttlFor(code).Seconds())); err != nil {
 		log.WithError(err).Error("Price Cache Write Failed")
 	}
 }

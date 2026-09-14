@@ -9,23 +9,24 @@ import (
 	"github.com/Ptt-Alertor/ptt-alertor/myutil"
 )
 
-// Distribution summarises what one spec has been asking over a window.
+// Distribution summarises what one product has been asking over a window.
 type Distribution struct {
-	Spec    Spec
-	Window  time.Duration
-	Count   int
-	Sold    int
-	Min     int
-	Max     int
-	P25     int
-	Median  int
-	P75     int
+	Kind   Kind
+	Query  Attrs
+	Window time.Duration
+	Count  int
+	Sold   int
+	Min    int
+	Max    int
+	P25    int
+	Median int
+	P75    int
+	// Spread lists, for each attribute the query left open, the values the
+	// records actually span. A query that did not pin capacity can then say what
+	// it is averaging over: a 512G at 47,500 sits in the same tail as an
+	// overpriced 256G, and the reader cannot tell which unless told.
+	Spread  map[string][]string
 	Buckets []Bucket
-	// Capacities lists the capacities the records span, so a query that did not
-	// pin one can say what it is actually averaging over: a 512G at 47,500 sits
-	// in the same tail as an overpriced 256G, and the reader cannot tell which
-	// unless told.
-	Capacities []int
 }
 
 // Bucket is one price band of a distribution.
@@ -41,22 +42,20 @@ type Bucket struct {
 // counting each relist separately would weight those sellers more heavily than
 // the rest.
 //
-// Records whose capacity is unknown are left alone: without it the spec is too
-// coarse to tell one of a seller's phones from another, and merging them would
-// discard genuinely distinct listings.
-func Dedupe(records []Record) []Record {
+// Records whose attributes are too coarse to identify one unit are left alone;
+// merging them would discard genuinely distinct listings.
+func Dedupe(kind Kind, records []Record) []Record {
 	kept := make([]Record, 0, len(records))
 	at := make(map[string]int, len(records))
 	for _, record := range records {
-		if record.CapacityGB == 0 {
+		identity, ok := kind.DedupeKey(record.Attrs)
+		if !ok {
 			kept = append(kept, record)
 			continue
 		}
-		key := strings.Join([]string{
-			record.Author, record.Model, record.Variant, capacityString(record.CapacityGB),
-		}, "|")
-		seen, ok := at[key]
-		if !ok {
+		key := record.Author + "|" + identity
+		seen, found := at[key]
+		if !found {
 			at[key] = len(kept)
 			kept = append(kept, record)
 			continue
@@ -68,33 +67,48 @@ func Dedupe(records []Record) []Record {
 	return kept
 }
 
-// Describe summarises the asking prices for one spec. Want-ads are excluded --
-// those are budgets, not asking prices -- while sold listings are kept and
+// Describe summarises the asking prices matching a query. Want-ads are excluded
+// -- those are budgets, not asking prices -- while sold listings are kept and
 // counted separately.
-func Describe(records []Record, spec Spec, window time.Duration) Distribution {
+func Describe(kind Kind, records []Record, query Attrs, window time.Duration) Distribution {
 	cutoff := time.Now().Add(-window)
+	dist := Distribution{Kind: kind, Query: query, Window: window, Spread: map[string][]string{}}
 	prices := make([]int, 0)
-	capacities := make(map[int]bool)
-	dist := Distribution{Spec: spec, Window: window}
-	for _, record := range Dedupe(records) {
-		if record.PostType == "徵求" || record.Price <= 0 {
+	spread := make(map[string]map[string]bool)
+	for _, record := range Dedupe(kind, records) {
+		if record.Kind != kind.Name() || record.PostType == "徵求" || record.Price <= 0 {
 			continue
 		}
-		if record.PostedAt.Before(cutoff) || !matches(record, spec) {
+		if record.PostedAt.Before(cutoff) || !record.Attrs.Matches(query) {
 			continue
 		}
 		prices = append(prices, record.Price)
-		capacities[record.CapacityGB] = true
 		if record.Sold {
 			dist.Sold++
 		}
+		for _, name := range kind.GroupBy() {
+			if query.Get(name) != "" || record.Attrs.Get(name) == "" {
+				continue
+			}
+			if spread[name] == nil {
+				spread[name] = make(map[string]bool)
+			}
+			spread[name][record.Attrs.Get(name)] = true
+		}
 	}
-	for capacity := range capacities {
-		dist.Capacities = append(dist.Capacities, capacity)
-	}
-	sort.Ints(dist.Capacities)
 	if len(prices) == 0 {
 		return dist
+	}
+	for name, values := range spread {
+		if len(values) < 2 {
+			continue
+		}
+		listed := make([]string, 0, len(values))
+		for value := range values {
+			listed = append(listed, value)
+		}
+		sort.Strings(listed)
+		dist.Spread[name] = listed
 	}
 	sort.Ints(prices)
 	dist.Count = len(prices)
@@ -102,21 +116,6 @@ func Describe(records []Record, spec Spec, window time.Duration) Distribution {
 	dist.P25, dist.Median, dist.P75 = percentile(prices, 25), percentile(prices, 50), percentile(prices, 75)
 	dist.Buckets = bucketize(prices)
 	return dist
-}
-
-// matches reports whether a record is an observation of spec. A zero field in
-// spec means "any", so a caller can ask about every capacity of a model at once.
-func matches(record Record, spec Spec) bool {
-	if spec.Model != "" && !strings.EqualFold(record.Model, spec.Model) {
-		return false
-	}
-	if spec.Variant != "" && !strings.EqualFold(record.Variant, spec.Variant) {
-		return false
-	}
-	if spec.CapacityGB != 0 && record.CapacityGB != spec.CapacityGB {
-		return false
-	}
-	return true
 }
 
 // percentile returns the linearly interpolated percentile of sorted prices, the
@@ -142,7 +141,7 @@ func percentile(sorted []int, p int) int {
 // keeps the distribution to maxBuckets bands wins. Asking prices almost never
 // repeat exactly -- the same phone is listed at 36200, 36500 and 36800 -- so a
 // tally of exact prices says nothing, and bands are what show the shape.
-var bucketWidths = []int{500, 1000, 2000, 5000, 10000}
+var bucketWidths = []int{500, 1000, 2000, 5000, 10000, 20000}
 
 const maxBuckets = 8
 
@@ -178,23 +177,30 @@ func bucketize(sorted []int) []Bucket {
 
 // String renders a distribution for a chat message.
 func (d Distribution) String() string {
+	label := d.Kind.Label(d.Query)
+	days := int(d.Window.Hours() / 24)
 	if d.Count == 0 {
-		return fmt.Sprintf("%s：近 %d 天沒有資料", d.Spec, int(d.Window.Hours()/24))
+		return fmt.Sprintf("%s：近 %d 天沒有資料", label, days)
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s（近 %d 天, %d 筆", d.Spec, int(d.Window.Hours()/24), d.Count)
+	fmt.Fprintf(&sb, "%s（近 %d 天, %d 筆", label, days, d.Count)
 	if d.Sold > 0 {
 		fmt.Fprintf(&sb, ", 其中 %d 筆已售出", d.Sold)
 	}
 	sb.WriteString("）\n")
 	fmt.Fprintf(&sb, "中位數 %s   P25 %s   P75 %s\n", myutil.Comma(d.Median), myutil.Comma(d.P25), myutil.Comma(d.P75))
 	fmt.Fprintf(&sb, "區間 %s ~ %s\n", myutil.Comma(d.Min), myutil.Comma(d.Max))
-	if d.Spec.CapacityGB == 0 && len(d.Capacities) > 1 {
-		labels := make([]string, 0, len(d.Capacities))
-		for _, capacity := range d.Capacities {
-			labels = append(labels, capacityString(capacity))
+	for _, name := range d.Kind.GroupBy() {
+		values, ok := d.Spread[name]
+		if !ok {
+			continue
 		}
-		fmt.Fprintf(&sb, "⚠ 含多種容量：%s（指定容量可更準）\n", strings.Join(labels, "、"))
+		shown := make([]string, 0, len(values))
+		for _, value := range values {
+			shown = append(shown, d.Kind.AttrValue(name, value))
+		}
+		fmt.Fprintf(&sb, "⚠ 含多種%s：%s（指定後更準）\n",
+			d.Kind.AttrLabel(name), strings.Join(shown, "、"))
 	}
 	for _, bucket := range d.Buckets {
 		fmt.Fprintf(&sb, "%s-%s %s %.0f%%\n",
@@ -222,23 +228,23 @@ const DefaultWindow = 30 * 24 * time.Hour
 // more about who happened to post than about the market.
 const minComparable = 5
 
-// Query summarises what a spec has been asking over a window.
-func Query(spec Spec, window time.Duration) (Distribution, error) {
+// Query summarises what a product has been asking over a window.
+func Query(kind Kind, query Attrs, window time.Duration) (Distribution, error) {
 	records, err := Load(time.Now().Add(-window))
 	if err != nil {
-		return Distribution{Spec: spec, Window: window}, err
+		return Distribution{Kind: kind, Query: query, Window: window}, err
 	}
-	return Describe(records, spec, window), nil
+	return Describe(kind, records, query, window), nil
 }
 
-// Compare reports how a price sits against the recent market for its spec, as a
-// sentence to append to an alert. It returns "" when there is nothing useful to
-// say, so a caller can append it unconditionally.
-func Compare(spec Spec, price int) string {
-	if spec.Model == "" || price <= 0 {
+// Compare reports how a price sits against the recent market for its product, as
+// a sentence to append to an alert. It returns "" when there is nothing useful
+// to say, so a caller can append it unconditionally.
+func Compare(kind Kind, query Attrs, price int) string {
+	if len(query) == 0 || price <= 0 {
 		return ""
 	}
-	dist, err := Query(spec, DefaultWindow)
+	dist, err := Query(kind, query, DefaultWindow)
 	if err != nil || dist.Count < minComparable || dist.Median <= 0 {
 		return ""
 	}

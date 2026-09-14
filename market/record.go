@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,56 +23,26 @@ import (
 
 // Record is one asking price observed in one article.
 type Record struct {
+	// Kind names the class of goods, so records of different classes can share
+	// one file and one query path.
+	Kind   string `json:"kind"`
 	Board  string `json:"board"`
 	Code   string `json:"code"`
 	Author string `json:"author"`
 	// PostedAt is when the article appeared; ObservedAt is when its price was
 	// read. They differ, and both matter: sellers edit prices after posting, so
 	// a record is only the price as it stood when it was read.
-	PostedAt      time.Time `json:"postedAt"`
-	ObservedAt    time.Time `json:"observedAt"`
-	Model         string    `json:"model"`
-	Variant       string    `json:"variant"`
-	CapacityGB    int       `json:"capacityGB"`
-	BatteryHealth int       `json:"batteryHealth,omitempty"`
-	Price         int       `json:"price"`
+	PostedAt   time.Time `json:"postedAt"`
+	ObservedAt time.Time `json:"observedAt"`
+	// Attrs identify the product, in whatever terms its Kind defines.
+	Attrs Attrs `json:"attrs"`
+	Price int   `json:"price"`
 	// Sold marks an article the seller has marked as sold. Unlike the alerting
 	// path, which skips them, they are kept here: a price that found a buyer is
 	// the most informative observation on the board.
 	Sold     bool   `json:"sold"`
 	PostType string `json:"postType"`
 	Title    string `json:"title"`
-}
-
-// Spec identifies what a record is an observation of. Records are grouped and
-// compared by spec, never by title.
-type Spec struct {
-	Model      string
-	Variant    string
-	CapacityGB int
-}
-
-func (s Spec) String() string {
-	name := "iPhone " + s.Model
-	if s.Variant != "" && s.Variant != "無" {
-		name += " " + s.Variant
-	}
-	if s.CapacityGB > 0 {
-		name += " " + capacityString(s.CapacityGB)
-	}
-	return name
-}
-
-func capacityString(gb int) string {
-	if gb >= 1024 && gb%1024 == 0 {
-		return strconv.Itoa(gb/1024) + "TB"
-	}
-	return strconv.Itoa(gb) + "G"
-}
-
-// Spec returns the record's spec.
-func (r Record) Spec() Spec {
-	return Spec{Model: r.Model, Variant: r.Variant, CapacityGB: r.CapacityGB}
 }
 
 var storeMu sync.Mutex

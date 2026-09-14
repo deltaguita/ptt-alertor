@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// testKind asks for nothing beyond a price, which is all these tests need.
+type testKind struct{}
+
+func (testKind) Name() string                       { return "test" }
+func (testKind) AttrSchema() map[string]interface{} { return map[string]interface{}{} }
+func (testKind) PromptRules() string                { return "" }
+
 func saleInfo(prices ...int) Info {
 	items := make([]Item, 0, len(prices))
 	for _, p := range prices {

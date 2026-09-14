@@ -15,15 +15,6 @@ import (
 	"github.com/garyburd/redigo/redis"
 )
 
-// defaultPattern selects the listings worth reading. Filtering on the listing
-// page, before anything is downloaded, is what keeps the survey affordable:
-// iPhone listings are about a fifth of the board, so four in five articles cost
-// nothing beyond the index page that was fetched anyway.
-//
-// The generation range runs to 19, so a model released later is picked up
-// without a change here.
-const defaultPattern = `(?i)i?phone\s*1[2-9]`
-
 // surveyPrefix keeps announcements and reviews out; only listings and want-ads
 // carry a price.
 var surveyPrefix = regexp.MustCompile(`^\[(販售|徵求)\]`)
@@ -42,24 +33,24 @@ const (
 // six-month backfill costs a few runs rather than one long burst that would
 // exhaust the day's API quota and draw attention from the board.
 type Survey struct {
+	// Kinds are the classes of goods this survey reads. One pass over the board
+	// serves all of them: the listing pages are fetched once regardless, and an
+	// article is only downloaded when some kind's title pattern wants it.
+	Kinds    []Kind
 	Board    string
 	Budget   int
 	Pause    time.Duration
 	Boundary time.Duration
-	// Pattern selects which listings to read. Widening it does not backfill by
-	// itself -- history already walked is not walked again -- so ResetBackfill
-	// is what makes the survey revisit the past for newly matched listings.
-	Pattern *regexp.Regexp
 }
 
-// NewSurvey builds a survey from the environment.
+// NewSurvey builds a survey over every registered kind.
 func NewSurvey(board string) *Survey {
 	return &Survey{
+		Kinds:    Kinds(),
 		Board:    board,
 		Budget:   envInt("MARKET_SURVEY_BUDGET", defaultBudget),
 		Pause:    time.Duration(envInt("MARKET_SURVEY_PAUSE_MS", int(defaultPause/time.Millisecond))) * time.Millisecond,
 		Boundary: time.Duration(envInt("MARKET_SURVEY_DAYS", int(defaultBoundary.Hours()/24))) * 24 * time.Hour,
-		Pattern:  envPattern("MARKET_SURVEY_PATTERN"),
 	}
 }
 
@@ -76,30 +67,6 @@ func Boards() []string {
 		return []string{"macshop"}
 	}
 	return boards
-}
-
-// envPattern compiles an override, falling back to the default rather than
-// failing to start: a typo in configuration should narrow nothing silently, and
-// the log says which pattern is in force.
-func envPattern(name string) *regexp.Regexp {
-	value := os.Getenv(name)
-	if value == "" {
-		return regexp.MustCompile(defaultPattern)
-	}
-	pattern, err := regexp.Compile(value)
-	if err != nil {
-		log.WithField(name, value).WithError(err).
-			Error("Market Survey Pattern Invalid, Using Default")
-		return regexp.MustCompile(defaultPattern)
-	}
-	return pattern
-}
-
-func (s *Survey) titlePattern() *regexp.Regexp {
-	if s.Pattern == nil {
-		return regexp.MustCompile(defaultPattern)
-	}
-	return s.Pattern
 }
 
 // ResetBackfill makes the next run walk history again from the newest pages.
@@ -194,16 +161,19 @@ func (s *Survey) scanPage(page int, seen map[string]bool, budget int) (int, time
 		if spent >= budget {
 			continue
 		}
-		if !surveyPrefix.MatchString(listed.Title) || !s.titlePattern().MatchString(listed.Title) {
+		if !surveyPrefix.MatchString(listed.Title) || seen[code] {
 			continue
 		}
-		if seen[code] {
+		wanted := s.kindsFor(listed.Title)
+		if len(wanted) == 0 {
 			continue
 		}
 		spent++
 		seen[code] = true
-		time.Sleep(s.Pause)
-		records = append(records, s.read(listed, code)...)
+		for _, kind := range wanted {
+			time.Sleep(s.Pause)
+			records = append(records, s.read(kind, listed, code)...)
+		}
 	}
 	if err := Append(records); err != nil {
 		log.WithError(err).Error("Market Survey Could Not Save Records")
@@ -211,34 +181,45 @@ func (s *Survey) scanPage(page int, seen map[string]bool, budget int) (int, time
 	return spent, newestOnPage, true
 }
 
-func (s *Survey) read(listed article.Article, code string) []Record {
-	info, err := price.Of(s.Board, code, func() (string, error) {
+// kindsFor returns the kinds whose title pattern claims a listing.
+func (s *Survey) kindsFor(title string) []Kind {
+	wanted := make([]Kind, 0, 1)
+	for _, kind := range s.Kinds {
+		if kind.TitlePattern().MatchString(title) {
+			wanted = append(wanted, kind)
+		}
+	}
+	return wanted
+}
+
+func (s *Survey) read(kind Kind, listed article.Article, code string) []Record {
+	info, err := price.Of(kind, s.Board, code, func() (string, error) {
 		fetched, err := web.FetchArticle(s.Board, code)
 		return fetched.Content, err
 	})
 	if err != nil {
-		log.WithFields(log.Fields{"board": s.Board, "code": code}).WithError(err).
-			Warn("Market Survey Extraction Failed")
+		log.WithFields(log.Fields{"board": s.Board, "code": code, "kind": kind.Name()}).
+			WithError(err).Warn("Market Survey Extraction Failed")
 		return nil
 	}
 	posted := postedAt(code)
 	records := make([]Record, 0, len(info.Items))
 	for _, item := range info.Items {
-		// Only phones carry a model, and a record without one cannot be
-		// compared against anything.
-		//
-		// Capacity is required as well, and it is what keeps accessories out:
-		// the board's rules make every genuine phone listing state its capacity,
-		// while "iPhone 16 原廠矽膠保護殼" has none -- and at 699 it would drag
-		// an iPhone 16 distribution down by an order of magnitude.
-		if item.Model == "" || item.CapacityGB == 0 || item.Price <= 0 {
+		if item.Price <= 0 {
+			continue
+		}
+		// The kind decides whether an item is one of its own: a phone case named
+		// "iPhone 16 保護殼" is not an iPhone, and recording it at 699 would drag
+		// the iPhone 16 distribution down by an order of magnitude.
+		attrs, ok := kind.Attrs(item)
+		if !ok {
 			continue
 		}
 		records = append(records, Record{
-			Board: s.Board, Code: code, Author: listed.Author, Title: listed.Title,
+			Kind: kind.Name(), Board: s.Board, Code: code,
+			Author: listed.Author, Title: listed.Title,
 			PostedAt: posted, ObservedAt: time.Now(),
-			Model: item.Model, Variant: item.Variant, CapacityGB: item.CapacityGB,
-			BatteryHealth: item.BatteryHealth, Price: item.Price,
+			Attrs: attrs, Price: item.Price,
 			Sold: info.IsSold, PostType: info.PostType,
 		})
 	}
