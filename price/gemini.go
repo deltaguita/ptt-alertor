@@ -34,6 +34,13 @@ const prompt = `你是 PTT 二手交易看板的資訊抽取器。只抽取文�
 4. is_sold：出現「已售出」「已售」「已結案」「完售」等字樣則為 true。
 5. post_type：販售 / 徵求 / 其他。徵求文的金額是預算，仍填入 price。
 6. 任何一個價格無法確定時，confidence 填 low，不要猜數字。
+7. 商品是 iPhone 手機本體時才填寫下列欄位。
+   保護殼、保護貼、充電器、轉接線、耳機等配件**不是手機本體**，
+   即使名稱裡有「iPhone 16」也一律把 model 留空。
+   - model：世代數字，例如 "17"、"16"。不是 iPhone 手機本體就留空。
+   - variant：Pro Max / Pro / Plus / 無。注意「17 Pro Max」的 variant 是 Pro Max 不是 Pro。
+   - capacity_gb：容量的 GB 數，1TB 填 1024、2TB 填 2048。沒寫就留 0。
+   - battery_health：電池健康度百分比的數字，沒寫就留 0。全新未拆可填 100。
 
 文章：`
 
@@ -54,6 +61,13 @@ var responseSchema = map[string]interface{}{
 				"properties": map[string]interface{}{
 					"name":  map[string]interface{}{"type": "string"},
 					"price": map[string]interface{}{"type": "integer"},
+					"model": map[string]interface{}{"type": "string"},
+					"variant": map[string]interface{}{
+						"type": "string",
+						"enum": []string{VariantProMax, VariantPro, VariantPlus, VariantBase},
+					},
+					"capacity_gb":    map[string]interface{}{"type": "integer"},
+					"battery_health": map[string]interface{}{"type": "integer"},
 				},
 				"required": []string{"name", "price"},
 			},

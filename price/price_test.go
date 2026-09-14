@@ -1,6 +1,10 @@
 package price
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+	"time"
+)
 
 func saleInfo(prices ...int) Info {
 	items := make([]Item, 0, len(prices))
@@ -48,9 +52,30 @@ func TestDecide(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, at := Decide(tt.info, tt.maxPrice)
-			if got != tt.want || at != tt.wantAt {
-				t.Errorf("Decide() = (%v, %d), want (%v, %d)", got, at, tt.want, tt.wantAt)
+			got, item := Decide(tt.info, tt.maxPrice)
+			if got != tt.want || item.Price != tt.wantAt {
+				t.Errorf("Decide() = (%v, %d), want (%v, %d)", got, item.Price, tt.want, tt.wantAt)
+			}
+		})
+	}
+}
+
+func TestTTLFor(t *testing.T) {
+	recent := time.Now().Add(-2 * time.Hour).Unix()
+	settled := time.Now().Add(-30 * 24 * time.Hour).Unix()
+	tests := []struct {
+		name string
+		code string
+		want time.Duration
+	}{
+		{"still editable", "M." + strconv.FormatInt(recent, 10) + ".A.4F7", freshTTL},
+		{"settled", "M." + strconv.FormatInt(settled, 10) + ".A.4F7", settledTTL},
+		{"unparsable code is treated as fresh", "not-a-code", freshTTL},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ttlFor(tt.code); got != tt.want {
+				t.Errorf("ttlFor(%q) = %v, want %v", tt.code, got, tt.want)
 			}
 		})
 	}

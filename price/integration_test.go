@@ -36,10 +36,10 @@ func TestIntegrationExtract(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Of() error: %v", err)
 			}
-			got, at := Decide(info, tt.maxPrice)
-			if got != tt.want || at != tt.wantPrice {
+			got, item := Decide(info, tt.maxPrice)
+			if got != tt.want || item.Price != tt.wantPrice {
 				t.Errorf("Decide() = (%v, %d), want (%v, %d)\ninfo: %+v",
-					got, at, tt.want, tt.wantPrice, info)
+					got, item.Price, tt.want, tt.wantPrice, info)
 			}
 		})
 	}

@@ -10,12 +10,14 @@ import (
 
 	log "github.com/Ptt-Alertor/logrus"
 
+	"github.com/Ptt-Alertor/ptt-alertor/market"
 	"github.com/Ptt-Alertor/ptt-alertor/models"
 	"github.com/Ptt-Alertor/ptt-alertor/models/article"
 	"github.com/Ptt-Alertor/ptt-alertor/models/author"
 	"github.com/Ptt-Alertor/ptt-alertor/models/board"
 	"github.com/Ptt-Alertor/ptt-alertor/models/keyword"
 	"github.com/Ptt-Alertor/ptt-alertor/models/user"
+	"github.com/Ptt-Alertor/ptt-alertor/myutil"
 	"github.com/Ptt-Alertor/ptt-alertor/price"
 	"github.com/Ptt-Alertor/ptt-alertor/ptt/web"
 )
@@ -278,7 +280,16 @@ func keepByPrice(atcl *article.Article, boardName string, maxPrice int) bool {
 	case price.NotifyUnverified:
 		atcl.Title = unverifiedPriceTag + atcl.Title
 	case price.Notify:
-		atcl.Title = fmt.Sprintf("[%d] %s", matched, atcl.Title)
+		atcl.Title = fmt.Sprintf("[%s] %s", myutil.Comma(matched.Price), atcl.Title)
+		// The market line is what turns a price into a judgement: 36,000 means
+		// nothing until it is set against what the same phone has been asking.
+		if against := market.Compare(market.Spec{
+			Model:      matched.Model,
+			Variant:    matched.Variant,
+			CapacityGB: matched.CapacityGB,
+		}, matched.Price); against != "" {
+			atcl.Title += "\r\n" + against
+		}
 	}
 	return true
 }

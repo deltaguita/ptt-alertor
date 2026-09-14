@@ -12,6 +12,8 @@ package price
 
 import (
 	"encoding/json"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -20,10 +22,38 @@ import (
 	"github.com/garyburd/redigo/redis"
 )
 
-// cacheTTL bounds the cache. Board articles are irrelevant long before this,
-// and the bound is what keeps the key set from growing without limit -- the
-// Redis instance runs with noeviction, so nothing else would reclaim them.
-const cacheTTL = 30 * 24 * time.Hour
+// Sellers edit their posts: a price cut a few days after posting is routine, and
+// the edit leaves the article code unchanged. A cached extraction is therefore
+// only as trustworthy as the article is settled, so an article still inside its
+// editing window is cached just long enough to spare a burst of duplicate calls,
+// while one that has settled is cached for the full retention window.
+//
+// settledTTL is also what keeps the key set from growing without limit -- the
+// Redis instance runs with noeviction, so nothing else would reclaim these keys.
+const (
+	freshTTL     = 6 * time.Hour
+	settledTTL   = 30 * 24 * time.Hour
+	settlePeriod = 7 * 24 * time.Hour
+)
+
+// articleCodeTime matches the epoch seconds PTT embeds in an article code, which
+// is when the article was posted.
+var articleCodeTime = regexp.MustCompile(`^[GM]\.(\d+)\.`)
+
+func ttlFor(code string) time.Duration {
+	matches := articleCodeTime.FindStringSubmatch(code)
+	if len(matches) < 2 {
+		return freshTTL
+	}
+	posted, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return freshTTL
+	}
+	if time.Since(time.Unix(posted, 0)) < settlePeriod {
+		return freshTTL
+	}
+	return settledTTL
+}
 
 const (
 	PostTypeSale   = "販售"
@@ -41,7 +71,23 @@ const (
 type Item struct {
 	Name  string `json:"name"`
 	Price int    `json:"price"`
+	// Model is the phone generation as a bare number ("17"), empty for anything
+	// that is not an iPhone. Variant, CapacityGB and BatteryHealth are likewise
+	// zero when the article does not say.
+	Model         string `json:"model,omitempty"`
+	Variant       string `json:"variant,omitempty"`
+	CapacityGB    int    `json:"capacity_gb,omitempty"`
+	BatteryHealth int    `json:"battery_health,omitempty"`
 }
+
+// Variants an item may carry. Order matters when classifying from a title:
+// "17 Pro Max" contains "Pro", so Pro Max has to be tested first.
+const (
+	VariantProMax = "Pro Max"
+	VariantPro    = "Pro"
+	VariantPlus   = "Plus"
+	VariantBase   = "無"
+)
 
 // Info is what the extractor reports about an article.
 type Info struct {
@@ -75,25 +121,27 @@ const (
 )
 
 // Decide reports what to do with an article given a subscriber's price ceiling,
-// along with the matching price when there is one.
-func Decide(info Info, maxPrice int) (Decision, int) {
+// along with the cheapest item that met it. The item, not just its price, is
+// what the caller needs: comparing against the market requires knowing which
+// model and capacity was matched.
+func Decide(info Info, maxPrice int) (Decision, Item) {
 	if info.IsSold || info.PostType == PostTypeWanted {
-		return Skip, 0
+		return Skip, Item{}
 	}
 	if info.Confidence != ConfidenceHigh || len(info.Items) == 0 {
-		return NotifyUnverified, 0
+		return NotifyUnverified, Item{}
 	}
-	best, found := 0, false
+	best, found := Item{}, false
 	for _, item := range info.Items {
 		if item.Price <= 0 || item.Price > maxPrice {
 			continue
 		}
-		if !found || item.Price < best {
-			best, found = item.Price, true
+		if !found || item.Price < best.Price {
+			best, found = item, true
 		}
 	}
 	if !found {
-		return Skip, 0
+		return Skip, Item{}
 	}
 	return Notify, best
 }
@@ -164,8 +212,12 @@ func fetchAndExtract(board, code string, fetchContent func() (string, error)) (I
 	return info, nil
 }
 
+// cacheKey carries a version that covers both the stored shape and the rules the
+// extraction was made under. Bump it whenever either changes: an entry written
+// before accessories were excluded still claims a phone case is an iPhone 16,
+// and a stale hit like that is silently wrong rather than merely missing.
 func cacheKey(board, code string) string {
-	return "price:" + board + ":" + code
+	return "price:v3:" + board + ":" + code
 }
 
 func lookup(board, code string) (Info, bool) {
@@ -194,7 +246,7 @@ func store(board, code string, info Info) {
 	}
 	conn := connections.Redis()
 	defer conn.Close()
-	if _, err := conn.Do("SET", cacheKey(board, code), encoded, "EX", int(cacheTTL.Seconds())); err != nil {
+	if _, err := conn.Do("SET", cacheKey(board, code), encoded, "EX", int(ttlFor(code).Seconds())); err != nil {
 		log.WithError(err).Error("Price Cache Write Failed")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Ptt-Alertor/ptt-alertor/market"
 	"github.com/Ptt-Alertor/ptt-alertor/models"
 	"github.com/Ptt-Alertor/ptt-alertor/myutil"
 	"github.com/Ptt-Alertor/ptt-alertor/ptt/web"
@@ -53,6 +54,11 @@ var Commands = map[string]map[string]string{
 		"新增(推/噓)文數 看板 總數": "通知推或噓文數",
 		"範例":              "新增推文數 joke,beauty 10",
 		"歸零即刪除":           "新增噓文數 joke 0",
+	},
+	"行情相關": {
+		"行情 機型": "查詢近 30 天的售價分布",
+		"範例":    "行情 iPhone 17 Pro Max 256",
+		"可省略容量": "行情 17 Pro（涵蓋所有容量）",
 	},
 	"售價相關": {
 		"新增售價 看板 關鍵字 上限": "標題命中後再讀內文，售價低於上限才通知",
@@ -118,6 +124,8 @@ func HandleCommand(text string, userID string, isUser bool) string {
 			return err.Error()
 		}
 		return result
+	case "行情", "market":
+		return handleMarket(text)
 	case "新增售價", "刪除售價":
 		result, err := handleMaxPrice(command, userID, text)
 		if err != nil {
@@ -380,6 +388,23 @@ func handleKeyword(command, userID, board, keywordStr string) (string, error) {
 		return "", errors.New(command + updateFailedMsg)
 	}
 	return command + "成功", nil
+}
+
+func handleMarket(text string) string {
+	query := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), strings.Fields(text)[0]))
+	if query == "" {
+		return "請指定機型。範例：行情 iPhone 17 Pro Max 256"
+	}
+	spec := market.ParseSpec(query)
+	if spec.Model == "" {
+		return "看不出機型。範例：行情 iPhone 17 Pro Max 256"
+	}
+	dist, err := market.Query(spec, market.DefaultWindow)
+	if err != nil {
+		log.WithError(err).Error("Market Query Failed")
+		return "查詢行情失敗，請稍後再試。"
+	}
+	return dist.String()
 }
 
 // boardPattern matches the board list shared by every subscription command.

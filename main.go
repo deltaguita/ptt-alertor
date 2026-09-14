@@ -12,6 +12,8 @@ import (
 	"github.com/julienschmidt/httprouter"
 	"github.com/robfig/cron"
 
+	"github.com/Ptt-Alertor/ptt-alertor/market"
+
 	"github.com/Ptt-Alertor/ptt-alertor/channels/line"
 	"github.com/Ptt-Alertor/ptt-alertor/channels/messenger"
 	"github.com/Ptt-Alertor/ptt-alertor/channels/telegram"
@@ -150,6 +152,10 @@ func startJobs() {
 	c := cron.New()
 	c.AddJob("@hourly", jobs.NewTop())
 	c.AddJob("@every 48h", jobs.NewPushSumKeyReplacer())
+	// Every six hours rather than daily: each run is capped by its own budget,
+	// so spreading the work keeps the backfill moving without bunching the API
+	// calls or the requests to the board into one burst.
+	c.AddJob("@every 6h", market.NewSurvey("macshop"))
 	c.Start()
 }
 
