@@ -35,7 +35,7 @@ type pushSumChecker struct {
 func NewPushSumChecker() *pushSumChecker {
 	pscOnce.Do(func() {
 		psCker = &pushSumChecker{
-			duration: 500 * time.Millisecond,
+			duration: 3 * time.Second,
 		}
 		psCker.done = make(chan struct{})
 		psCker.ch = make(chan pushSumChecker)
@@ -75,6 +75,10 @@ func (psc pushSumChecker) Run() {
 				return
 			default:
 				boards := pushsum.List()
+				if len(boards) == 0 {
+					time.Sleep(psc.duration)
+					continue
+				}
 				for _, board := range boards {
 					ba := BoardArticles{board: board}
 					time.Sleep(psc.duration)

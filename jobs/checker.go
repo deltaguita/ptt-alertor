@@ -18,14 +18,17 @@ import (
 	"github.com/Ptt-Alertor/ptt-alertor/models/user"
 )
 
-const checkHighBoardDuration = 1 * time.Second
+const checkHighBoardDuration = 30 * time.Second
 
 var boardCh = make(chan *board.Board, 700)
 var highBoards []*board.Board
 var highBoardNames = strings.Split(os.Getenv("BOARD_HIGH"), ",")
 
 func init() {
-	for _, name := range highBoardNames { if name == "" { continue }
+	for _, name := range highBoardNames {
+		if name == "" {
+			continue
+		}
 		bd := models.Board()
 		bd.Name = name
 		highBoards = append(highBoards, bd)
@@ -52,7 +55,7 @@ type Checker struct {
 func NewChecker() *Checker {
 	ckerOnce.Do(func() {
 		cker = &Checker{
-			duration: 250 * time.Millisecond,
+			duration: 5 * time.Second,
 		}
 		cker.done = make(chan struct{})
 		cker.ch = make(chan Checker)
@@ -86,6 +89,7 @@ func (c Checker) Run() {
 				return
 			default:
 				checkBoards(highBoards, checkHighBoardDuration)
+				time.Sleep(checkHighBoardDuration)
 			}
 		}
 	}()
@@ -118,6 +122,7 @@ func (c Checker) Run() {
 				}
 			default:
 				checkBoards(models.Board().All(), duration)
+				time.Sleep(duration)
 			}
 		}
 	}()

@@ -28,7 +28,7 @@ type commentChecker struct {
 func NewCommentChecker() *commentChecker {
 	cmtOnce.Do(func() {
 		cmtcker = &commentChecker{}
-		cmtcker.duration = 500 * time.Millisecond
+		cmtcker.duration = 3 * time.Second
 		cmtcker.done = make(chan struct{})
 		cmtcker.ch = make(chan commentChecker)
 	})
@@ -57,6 +57,10 @@ func (cc commentChecker) Run() {
 				return
 			default:
 				codes := new(article.Articles).List()
+				if len(codes) == 0 {
+					time.Sleep(cc.duration)
+					continue
+				}
 				for _, code := range codes {
 					time.Sleep(cc.duration)
 					go cc.checkComments(code, ach)
