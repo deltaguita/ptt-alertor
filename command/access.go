@@ -118,17 +118,53 @@ func handleAdmin(text, account string) (string, bool) {
 	return "", false
 }
 
+// botLink is where a newcomer starts the conversation. The Telegram channel
+// knows the bot's own name and tells us at startup; until it does the invitation
+// falls back to naming the bot rather than linking it.
+var botLink string
+
+// SetBotLink records where to send someone who has been invited.
+func SetBotLink(link string) { botLink = link }
+
+// newInvite answers with the invitation itself rather than with instructions for
+// the person issuing it. The whole reply is meant to be forwarded as it stands,
+// so nothing in it addresses the administrator -- a note, for instance, is kept
+// for the code listing and left out here.
 func newInvite(account, note string) string {
 	code, err := invite.New(account, note)
 	if err != nil {
 		log.WithError(err).Error("Invite Create Failed")
 		return "產生邀請碼失敗。"
 	}
-	reply := "邀請碼：" + code.Code + "\n\n把這組碼給對方，請他對 bot 直接貼上即可開通。\n一組只能用一次。"
-	if note != "" {
-		reply += "\n備註：" + note
+	return invitationFor(code.Code, botLink)
+}
+
+// invitationFor builds the message. It takes the link rather than reading the
+// package variable so that the wording can be tested without a bot running.
+func invitationFor(code, link string) string {
+	open := "開啟 Ptt Alertor bot"
+	if link != "" {
+		open = "開啟 " + link
 	}
-	return reply
+	return strings.Join([]string{
+		"🔔 邀請你使用 Ptt Alertor",
+		"PTT 二手商品降價通知機器人",
+		"",
+		"可以追蹤指定看板的關鍵字，",
+		"並在售價低於你設定的金額時通知你。",
+		"",
+		"開通步驟：",
+		"1. " + open,
+		"2. 點「開始」或輸入 /start",
+		"3. 把下面這組邀請碼貼給它",
+		"",
+		code,
+		"",
+		"開通後輸入「選單」，全程用按鈕操作，",
+		"不需要記任何指令。",
+		"",
+		"（這組邀請碼只能使用一次）",
+	}, "\n")
 }
 
 func listInvites() string {

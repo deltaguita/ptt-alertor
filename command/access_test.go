@@ -68,3 +68,34 @@ func TestAdminCannotRemoveTheirOwnAccess(t *testing.T) {
 		t.Errorf("setEnabled() = %q, want a refusal", reply)
 	}
 }
+
+func TestInvitationReadsAsAnInvitation(t *testing.T) {
+	// The reply is meant to be forwarded as it stands, so nothing in it may
+	// address the person who issued it.
+	SetBotLink("https://t.me/example_bot")
+	t.Cleanup(func() { SetBotLink("") })
+
+	message := invitationFor("2WTBWZFE", "https://t.me/example_bot")
+
+	for _, want := range []string{"2WTBWZFE", "https://t.me/example_bot", "/start", "選單"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the invitation is missing %q:\n%s", want, message)
+		}
+	}
+	// Phrases that only make sense to the issuer.
+	for _, leaked := range []string{"把這組碼給對方", "備註"} {
+		if strings.Contains(message, leaked) {
+			t.Errorf("the invitation talks to the issuer (%q):\n%s", leaked, message)
+		}
+	}
+}
+
+func TestInvitationNamesTheBotWhenThereIsNoLink(t *testing.T) {
+	message := invitationFor("2WTBWZFE", "")
+	if strings.Contains(message, "https://") {
+		t.Errorf("a half-formed link leaked in:\n%s", message)
+	}
+	if !strings.Contains(message, "Ptt Alertor") {
+		t.Errorf("without a link the bot is not named:\n%s", message)
+	}
+}

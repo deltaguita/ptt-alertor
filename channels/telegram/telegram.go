@@ -27,6 +27,9 @@ func init() {
 		log.WithError(err).Fatal("Telegram Bot Initialize Failed")
 	}
 	log.Info("Telegram Authorized on " + bot.Self.UserName)
+	// The invitation needs somewhere to send a newcomer, and only this channel
+	// knows the bot's own name.
+	command.SetBotLink("https://t.me/" + bot.Self.UserName)
 
 	// 移除舊的 webhook，使用 Polling 模式
 	bot.RemoveWebhook()
