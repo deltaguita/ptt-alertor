@@ -186,3 +186,47 @@ func TestPercentile(t *testing.T) {
 		t.Errorf("percentile of nothing = %d, want 0", got)
 	}
 }
+
+func TestBucketizePrefersThousands(t *testing.T) {
+	// The real 17 Pro Max sample: five listings spread over 15,500. Judging by
+	// the span would widen to 2,000 for sixteen bands, but only five are ever
+	// printed.
+	prices := []int{32000, 33500, 34000, 36000, 47500}
+	buckets := bucketize(prices)
+	if len(buckets) != 5 {
+		t.Fatalf("got %d bands, want one per listing: %+v", len(buckets), buckets)
+	}
+	if width := buckets[0].To - buckets[0].From + 1; width != 1000 {
+		t.Errorf("band width = %d, want 1000", width)
+	}
+	if buckets[0].From != 32000 || buckets[0].To != 32999 {
+		t.Errorf("first band = %d-%d, want 32000-32999", buckets[0].From, buckets[0].To)
+	}
+}
+
+func TestBucketizeWidensOnlyWhenBandsWouldCrowd(t *testing.T) {
+	// More than maxBuckets thousands-wide bands would actually be occupied, so
+	// the next width up is used.
+	prices := make([]int, 0, 20)
+	for i := 0; i < 20; i++ {
+		prices = append(prices, 20000+i*1000)
+	}
+	buckets := bucketize(prices)
+	if len(buckets) > maxBuckets {
+		t.Errorf("got %d bands, want at most %d", len(buckets), maxBuckets)
+	}
+	if width := buckets[0].To - buckets[0].From + 1; width != 2000 {
+		t.Errorf("band width = %d, want 2000 once thousands would crowd", width)
+	}
+}
+
+func TestBucketizeCountsEveryPrice(t *testing.T) {
+	prices := []int{4000, 4200, 4200, 12000, 36000}
+	total := 0
+	for _, bucket := range bucketize(prices) {
+		total += bucket.Count
+	}
+	if total != len(prices) {
+		t.Errorf("bands hold %d prices, want %d", total, len(prices))
+	}
+}

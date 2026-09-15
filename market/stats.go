@@ -137,19 +137,25 @@ func percentile(sorted []int, p int) int {
 	return sorted[lower] + int(float64(sorted[lower+1]-sorted[lower])*frac+0.5)
 }
 
-// bucketWidths are the band sizes tried, smallest first; the first one that
-// keeps the distribution to maxBuckets bands wins. Asking prices almost never
-// repeat exactly -- the same phone is listed at 36200, 36500 and 36800 -- so a
-// tally of exact prices says nothing, and bands are what show the shape.
-var bucketWidths = []int{500, 1000, 2000, 5000, 10000, 20000}
+// bucketWidths are the band sizes tried, narrowest first. Asking prices almost
+// never repeat exactly -- the same phone is listed at 36200, 36500 and 36800 --
+// so a tally of exact prices says nothing, and bands are what show the shape.
+// A thousand is the narrowest offered because it is the granularity people
+// actually haggle in.
+var bucketWidths = []int{1000, 2000, 5000, 10000, 20000}
 
-const maxBuckets = 8
+// maxBuckets caps how many bands a message will carry.
+const maxBuckets = 16
 
 func bucketize(sorted []int) []Bucket {
-	span := sorted[len(sorted)-1] - sorted[0]
 	width := bucketWidths[len(bucketWidths)-1]
 	for _, candidate := range bucketWidths {
-		if span/candidate < maxBuckets {
+		// Count the bands that would actually hold something, not the bands the
+		// range spans. Only occupied bands are printed, so a handful of listings
+		// spread thinly across a wide range still reads as a handful of rows --
+		// judging by the span alone widens the bands for a crowding that never
+		// happens.
+		if occupiedBands(sorted, candidate) <= maxBuckets {
 			width = candidate
 			break
 		}
@@ -173,6 +179,14 @@ func bucketize(sorted []int) []Bucket {
 		})
 	}
 	return buckets
+}
+
+func occupiedBands(sorted []int, width int) int {
+	bands := make(map[int]bool, len(sorted))
+	for _, price := range sorted {
+		bands[price/width*width] = true
+	}
+	return len(bands)
 }
 
 // String renders a distribution for a chat message.
