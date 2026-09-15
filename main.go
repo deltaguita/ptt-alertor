@@ -147,6 +147,10 @@ func main() {
 	log.Info("Web Server Was Been Shutdown")
 }
 
+// surveyStartDelay holds the first survey back until the rest of the service is
+// running, so its long walk does not compete with startup.
+const surveyStartDelay = 2 * time.Minute
+
 func startJobs() {
 	go jobs.NewChecker().Run()
 	go jobs.NewPushSumChecker().Run()
@@ -159,7 +163,15 @@ func startJobs() {
 	// so spreading the work keeps the backfill moving without bunching the API
 	// calls or the requests to the board into one burst.
 	for _, board := range market.Boards() {
-		c.AddJob("@every 6h", market.NewSurvey(board))
+		survey := market.NewSurvey(board)
+		c.AddJob("@every 6h", survey)
+		// cron counts the first interval from startup, so a fresh deployment
+		// would record nothing for six hours and only begin backfilling then.
+		// The delay lets the board checkers settle first.
+		go func() {
+			time.Sleep(surveyStartDelay)
+			survey.Run()
+		}()
 	}
 	c.Start()
 }
