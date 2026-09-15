@@ -190,6 +190,10 @@ func SendTextMessage(chatID int64, text string) {
 func sendTextMessage(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.DisableWebPagePreview = true
+	if formatted, ok := myutil.FenceToHTML(text); ok {
+		msg.Text = formatted
+		msg.ParseMode = tgbotapi.ModeHTML
+	}
 	_, err := bot.Send(msg)
 	if err != nil {
 		log.WithError(err).Error("Telegram Send Message Failed")

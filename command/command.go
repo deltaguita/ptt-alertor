@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Ptt-Alertor/ptt-alertor/market"
 	"github.com/Ptt-Alertor/ptt-alertor/models"
@@ -407,7 +408,28 @@ func handleMarket(text string) string {
 		log.WithError(err).Error("Market Query Failed")
 		return "查詢行情失敗，請稍後再試。"
 	}
-	return dist.String()
+	reply := dist.String()
+	if chart := marketChart(kind, attrs); chart != "" {
+		reply += "\n\n" + chart
+	}
+	return reply
+}
+
+// marketChart draws the daily means beneath the distribution. The chart is
+// fenced so that a channel able to show a monospaced block can do so: its axes
+// only line up in a fixed-width font.
+func marketChart(kind market.Kind, attrs market.Attrs) string {
+	records, err := market.Load(time.Now().Add(-market.DefaultWindow))
+	if err != nil {
+		log.WithError(err).Warn("Market Chart Load Failed")
+		return ""
+	}
+	days := market.Daily(kind, records, attrs, market.DefaultWindow)
+	chart := market.Chart(days, kind.Label(attrs)+"　每日均價")
+	if chart == "" {
+		return ""
+	}
+	return myutil.Fence + "\n" + chart + "\n" + myutil.Fence
 }
 
 // handleResurvey makes the next survey walk history again. Widening what is
