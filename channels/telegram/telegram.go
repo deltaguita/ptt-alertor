@@ -88,6 +88,11 @@ func handleCallbackQuery(update tgbotapi.Update) {
 	data := update.CallbackQuery.Data
 	acknowledge(update.CallbackQuery.ID)
 
+	if !command.IsEnabled(userID) {
+		SendTextMessage(chatID, "這個 bot 需要邀請碼才能使用。\n\n跟管理員要一組邀請碼，直接把它貼過來就會開通。")
+		return
+	}
+
 	// The menu's own buttons are handled first; anything else is one of the
 	// confirmation buttons, whose data is the command to run.
 	if handleMenuCallback(userID, chatID, data) {
@@ -113,7 +118,11 @@ func handleCommand(update tgbotapi.Update) {
 		responseText = command.HandleCommand(text, userID, true)
 	case "start":
 		command.HandleTelegramFollow(userID, chatID)
-		responseText = "歡迎使用 Ptt Alertor\n輸入「選單」用按鈕操作，或「指令」查看指令清單。"
+		if command.IsEnabled(userID) {
+			responseText = "歡迎使用 Ptt Alertor\n輸入「選單」用按鈕操作，或「指令」查看指令清單。"
+		} else {
+			responseText = "歡迎使用 Ptt Alertor\n\n這個 bot 需要邀請碼才能使用。\n跟管理員要一組邀請碼，直接把它貼過來就會開通。"
+		}
 	case "help":
 		responseText = command.HandleCommand("help", userID, true)
 	case "list":
@@ -121,6 +130,10 @@ func handleCommand(update tgbotapi.Update) {
 	case "ranking":
 		responseText = command.HandleCommand("ranking", userID, true)
 	case "menu":
+		if !command.IsEnabled(userID) {
+			SendTextMessage(chatID, "這個 bot 需要邀請碼才能使用。")
+			return
+		}
 		sendMenu(chatID)
 		return
 	case "showkeyboard":
@@ -145,6 +158,13 @@ func handleText(update tgbotapi.Update) {
 		"userID": userID,
 		"text":   text,
 	}).Info("Processing text command")
+
+	// Without access the only thing that works is redeeming a code, which
+	// HandleCommand answers. The menu and the wizard stay out of reach.
+	if !command.IsEnabled(userID) {
+		SendTextMessage(chatID, command.HandleCommand(text, userID, true))
+		return
+	}
 
 	// A wizard in progress owns the next message: an answer such as "17 Pro" is
 	// not a command and must not be read as one.

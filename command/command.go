@@ -93,6 +93,14 @@ var commandActionMap = map[string]updateAction{
 
 // HandleCommand handles command from chatbot
 func HandleCommand(text string, userID string, isUser bool) string {
+	// Access is checked before the text is read as a command: an account without
+	// it can do exactly one thing, which is redeem a code.
+	if reply, handled := guard(text, userID); handled {
+		return reply
+	}
+	if reply, handled := handleAdmin(text, userID); handled {
+		return reply
+	}
 	command := strings.ToLower(strings.Fields(strings.TrimSpace(text))[0])
 	if isUser {
 		log.WithFields(log.Fields{
@@ -706,7 +714,9 @@ func HandleTelegramFollow(id string, chatID int64) error {
 
 func handleFollow(u user.User) error {
 	if u.Profile.Account != "" {
-		u.Enable = true
+		// Starting a conversation does not grant access, or anyone removed could
+		// simply start another. Only an account that already had it keeps it.
+		u.Enable = u.Enable || IsAdmin(u.Profile.Account)
 		u.Update()
 	} else {
 		if u.Profile.Messenger != "" {
@@ -718,7 +728,8 @@ func handleFollow(u user.User) error {
 		if u.Profile.Telegram != "" {
 			u.Profile.Account = u.Profile.Telegram
 		}
-		u.Enable = true
+		// A new account waits for a code.
+		u.Enable = IsAdmin(u.Profile.Account)
 		err := u.Save()
 		if err != nil {
 			return err
