@@ -239,7 +239,7 @@ func askPrice(keyword string, chatID int64) {
 			tgbotapi.NewInlineKeyboardButtonData("✖️ 取消", wizardCancel),
 		),
 	)
-	text := "4/4　售價上限？\n\n低於這個金額才通知你。\n選「不限」就只看標題、不讀內文。" + hint
+	text := "4/4　售價上限？\n\n低於這個金額才通知你。\n選「不限」則全部通知，一樣會附上售價與行情對照。" + hint
 	send(chatID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 

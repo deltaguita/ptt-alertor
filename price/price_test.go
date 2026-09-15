@@ -56,6 +56,28 @@ func TestDecide(t *testing.T) {
 		},
 		{"non-positive price ignored", saleInfo(0, 32000), 35000, Notify, 32000},
 		{"only non-positive prices", saleInfo(0), 35000, Skip, 0},
+		// Without a ceiling nothing is filtered: every article the title matched
+		// still goes out, annotated with whatever could be established.
+		{"no ceiling annotates", saleInfo(32000), 0, Notify, 32000},
+		{"no ceiling keeps the dearest nobody would have asked for", saleInfo(99000), 0, Notify, 99000},
+		{"no ceiling still picks the cheapest", saleInfo(41500, 30000), 0, Notify, 30000},
+		{
+			"no ceiling keeps a want-ad, unannotated",
+			Info{PostType: PostTypeWanted, Items: []Item{{Price: 5500}}, Confidence: ConfidenceHigh},
+			0, NotifyPlain, 0,
+		},
+		{
+			"no ceiling keeps a sold listing, unannotated",
+			Info{PostType: PostTypeSale, IsSold: true, Items: []Item{{Price: 100}}, Confidence: ConfidenceHigh},
+			0, NotifyPlain, 0,
+		},
+		{
+			"no ceiling leaves low confidence alone",
+			Info{PostType: PostTypeSale, Items: []Item{{Price: 32000}}, Confidence: ConfidenceLow},
+			0, NotifyPlain, 0,
+		},
+		{"no ceiling and no usable price", saleInfo(0), 0, NotifyPlain, 0},
+		{"negative ceiling behaves as no ceiling", saleInfo(32000), -1, Notify, 32000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

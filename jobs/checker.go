@@ -234,10 +234,10 @@ func checkKeyword(keyword string, maxPrice int, bd *board.Board, cker Checker) {
 		if !newAtcl.MatchKeyword(keyword) {
 			continue
 		}
-		// The body is only read for keywords that carry a price ceiling, so a
-		// plain keyword subscription costs exactly what it did before: one
-		// listing page, no per-article request.
-		if maxPrice > 0 && !keepByPrice(&newAtcl, bd.Name, maxPrice) {
+		// Every title match has its body read, whether or not a ceiling was
+		// set: knowing what a listing asks is worth as much as filtering by
+		// it. Without a ceiling nothing is dropped, only annotated.
+		if !keepByPrice(&newAtcl, bd.Name, maxPrice) {
 			continue
 		}
 		newAtcl.Author = ""
@@ -256,7 +256,8 @@ func checkKeyword(keyword string, maxPrice int, bd *board.Board, cker Checker) {
 // notification once its asking price is known, and tags its title with what was
 // found. A price that cannot be established is never a reason to stay silent:
 // missing a bargain costs the subscriber more than a notification they did not
-// need.
+// need. A maxPrice of zero means no ceiling: the article is annotated and
+// always kept.
 func keepByPrice(atcl *article.Article, boardName string, maxPrice int) bool {
 	code := atcl.ParseCode()
 	if code == "" {
@@ -278,12 +279,18 @@ func keepByPrice(atcl *article.Article, boardName string, maxPrice int) bool {
 			"board": boardName,
 			"code":  code,
 		}).WithError(err).Warn("Price Extraction Failed")
-		atcl.Title = unverifiedPriceTag + atcl.Title
+		if maxPrice > 0 {
+			atcl.Title = unverifiedPriceTag + atcl.Title
+		}
 		return true
 	}
 	switch decision, matched := price.Decide(info, maxPrice); decision {
 	case price.Skip:
 		return false
+	case price.NotifyPlain:
+		// No ceiling and no price worth showing -- the title stands on its own,
+		// and tagging it "unverified" would only add noise to a subscription
+		// that never asked about price.
 	case price.NotifyUnverified:
 		atcl.Title = unverifiedPriceTag + atcl.Title
 	case price.Notify:

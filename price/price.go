@@ -120,22 +120,40 @@ const (
 	// still worth sending: a missed bargain costs the subscriber more than a
 	// notification they did not need.
 	NotifyUnverified
+	// NotifyPlain means the article goes out exactly as it came. It only arises
+	// without a ceiling, where nothing is being filtered and there is no price
+	// worth putting in front of the title.
+	NotifyPlain
 )
 
 // Decide reports what to do with an article given a subscriber's price ceiling,
 // along with the cheapest item that met it. The item, not just its price, is
 // what the caller needs: comparing against the market requires knowing which
 // model and capacity was matched.
+//
+// A ceiling of zero or less means the subscriber set none. Nothing is then
+// filtered -- every article the title matched still goes out -- but the price is
+// still established so the alert can carry it and the market line beside it.
 func Decide(info Info, maxPrice int) (Decision, Item) {
+	filtering := maxPrice > 0
+	// Sold and want-ads are not offers the subscriber can take up, so a ceiling
+	// drops them. Without one there is nothing to filter against: the article
+	// was asked for by title and is sent as it came.
 	if info.IsSold || info.PostType == PostTypeWanted {
-		return Skip, Item{}
+		if filtering {
+			return Skip, Item{}
+		}
+		return NotifyPlain, Item{}
 	}
 	if info.Confidence != ConfidenceHigh || len(info.Items) == 0 {
-		return NotifyUnverified, Item{}
+		if filtering {
+			return NotifyUnverified, Item{}
+		}
+		return NotifyPlain, Item{}
 	}
 	best, found := Item{}, false
 	for _, item := range info.Items {
-		if item.Price <= 0 || item.Price > maxPrice {
+		if item.Price <= 0 || (filtering && item.Price > maxPrice) {
 			continue
 		}
 		if !found || item.Price < best.Price {
@@ -143,7 +161,10 @@ func Decide(info Info, maxPrice int) (Decision, Item) {
 		}
 	}
 	if !found {
-		return Skip, Item{}
+		if filtering {
+			return Skip, Item{}
+		}
+		return NotifyPlain, Item{}
 	}
 	return Notify, best
 }
