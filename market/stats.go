@@ -273,3 +273,64 @@ func Compare(kind Kind, query Attrs, price int) string {
 		return fmt.Sprintf("與近 %d 天中位數 %s 相當（%d 筆）", days, myutil.Comma(dist.Median), dist.Count)
 	}
 }
+
+// Popular returns the products most often listed on a board recently, as labels
+// a subscriber could type verbatim. Offering them turns the one step of the
+// wizard that needs typing into a choice for the common case, and shows what
+// the board actually carries rather than leaving someone to guess.
+//
+// Labels leave out the attributes people do not put in a keyword -- a title says
+// "iPhone 17 Pro", not "iPhone 17 Pro 256G" -- so only the leading grouping
+// attributes are kept.
+func Popular(board string, window time.Duration, limit int) []string {
+	records, err := Load(time.Now().Add(-window))
+	if err != nil {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, record := range records {
+		if !strings.EqualFold(record.Board, board) || record.PostType == "徵求" {
+			continue
+		}
+		kind, ok := KindByName(record.Kind)
+		if !ok {
+			continue
+		}
+		if label := coarseLabel(kind, record.Attrs); label != "" {
+			counts[label]++
+		}
+	}
+	labels := make([]string, 0, len(counts))
+	for label := range counts {
+		labels = append(labels, label)
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		if counts[labels[i]] != counts[labels[j]] {
+			return counts[labels[i]] > counts[labels[j]]
+		}
+		return labels[i] < labels[j]
+	})
+	if len(labels) > limit {
+		labels = labels[:limit]
+	}
+	return labels
+}
+
+// coarseLabel names a product by everything but its last grouping attribute,
+// which is the one a keyword usually omits.
+func coarseLabel(kind Kind, attrs Attrs) string {
+	grouping := kind.GroupBy()
+	if len(grouping) < 2 {
+		return kind.Label(attrs)
+	}
+	coarse := Attrs{}
+	for _, name := range grouping[:len(grouping)-1] {
+		if value := attrs.Get(name); value != "" {
+			coarse[name] = value
+		}
+	}
+	if len(coarse) == 0 {
+		return ""
+	}
+	return kind.Label(coarse)
+}

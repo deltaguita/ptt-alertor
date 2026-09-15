@@ -29,7 +29,7 @@ func handleWizardText(userID string, chatID int64, text string) bool {
 		w.Board = strings.ToLower(text)
 		w.Step = wizard.StepKeyword
 		w.Save(userID)
-		askKeyword(chatID)
+		askKeyword(w.Board, chatID)
 	case wizard.StepKeyword:
 		w.Keyword = text
 		w.Step = wizard.StepExclude
@@ -87,7 +87,16 @@ func handleMenuCallback(userID string, chatID int64, data string) bool {
 	case strings.HasPrefix(data, wizardBoard):
 		board := strings.TrimPrefix(data, wizardBoard)
 		advance(userID, chatID, wizard.StepKeyword, func(w *wizard.Wizard) { w.Board = board })
-		askKeyword(chatID)
+		askKeyword(board, chatID)
+	case data == wizardType:
+		advance(userID, chatID, wizard.StepKeyword, func(w *wizard.Wizard) {})
+		askKeywordTyped(chatID)
+	case strings.HasPrefix(data, wizardKeyword):
+		keyword := strings.TrimPrefix(data, wizardKeyword)
+		w := advance(userID, chatID, wizard.StepExclude, func(w *wizard.Wizard) { w.Keyword = keyword })
+		if w != nil {
+			askExclude(w.Keyword, chatID)
+		}
 	case strings.HasPrefix(data, wizardExclude):
 		handleExcludeChoice(userID, chatID, strings.TrimPrefix(data, wizardExclude))
 	case strings.HasPrefix(data, wizardPrice):

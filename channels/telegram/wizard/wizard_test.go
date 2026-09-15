@@ -99,3 +99,16 @@ func TestSuggestsProMax(t *testing.T) {
 		}
 	}
 }
+
+func TestSuggestionsFitTelegramsCallbackLimit(t *testing.T) {
+	// Telegram caps callback data at 64 bytes and fails silently past it: the
+	// button renders and does nothing. The longest label a kind can produce has
+	// to stay inside that, prefix included.
+	const limit = 64
+	const prefix = "w:k:"
+	longest := "iPhone 17 Pro Max" // the widest the iPhone kind produces
+	if len(prefix)+len(longest) > limit {
+		t.Errorf("%q with its prefix is %d bytes, over the %d-byte limit",
+			longest, len(prefix)+len(longest), limit)
+	}
+}

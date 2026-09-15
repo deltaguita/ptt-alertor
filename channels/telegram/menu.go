@@ -23,6 +23,8 @@ const (
 
 	wizardBoard   = "w:b:"
 	wizardOther   = "w:other"
+	wizardKeyword = "w:k:"
+	wizardType    = "w:type"
 	wizardExclude = "w:x:"
 	wizardPrice   = "w:p:"
 	wizardConfirm = "w:ok"
@@ -50,6 +52,23 @@ func sendMenu(chatID int64) {
 		),
 	)
 	send(chatID, "要做什麼？", markup)
+}
+
+// callbackLimit is Telegram's cap on a button's data. Exceeding it fails
+// silently -- the button is shown and simply does nothing when pressed -- so a
+// suggestion that would not survive the round trip is dropped instead.
+const callbackLimit = 64
+
+func fitsCallback(labels []string, prefix string) []string {
+	kept := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if len(prefix)+len(label) > callbackLimit {
+			log.WithField("label", label).Warn("Telegram Suggestion Too Long For Callback")
+			continue
+		}
+		kept = append(kept, label)
+	}
+	return kept
 }
 
 func send(chatID int64, text string, markup interface{}) {
@@ -80,7 +99,8 @@ func askBoard(userID string, chatID int64) {
 			tgbotapi.NewInlineKeyboardButtonData("✖️ 取消", wizardCancel),
 		),
 	)
-	send(chatID, "1/4　要追蹤哪個看板？", tgbotapi.NewInlineKeyboardMarkup(rows...))
+	send(chatID, "1/4　要追蹤哪個看板？\n\n下面是你已訂閱的看板，也可以自己輸入別的。",
+		tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
 func subscribedBoards(userID string) []string {
@@ -100,13 +120,55 @@ func subscribedBoards(userID string) []string {
 	return boards
 }
 
-func askKeyword(chatID int64) {
-	send(chatID, "2/4　要追蹤什麼關鍵字？\n\n直接輸入，例如：iPhone 17 Pro", nil)
+// askKeyword is the one step that cannot be answered entirely with buttons, so
+// it says plainly what the keyword is matched against and offers what the board
+// has actually been carrying. "Type something" leaves a subscriber guessing at
+// both the form and the vocabulary.
+func askKeyword(board string, chatID int64) {
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0)
+	popular := fitsCallback(market.Popular(board, market.DefaultWindow, 5), wizardKeyword)
+	for _, label := range popular {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, wizardKeyword+label),
+		))
+	}
+	rows = append(rows,
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✏️ 自己輸入", wizardType),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✖️ 取消", wizardCancel),
+		),
+	)
+
+	text := "2/4　要追蹤什麼關鍵字？\n\n" +
+		"比對的是文章「標題」，不分大小寫，可以有空格。\n" +
+		"標題有含這幾個字就通知你。"
+	if len(popular) > 0 {
+		text += "\n\n" + board + " 近 30 天常出現："
+	} else {
+		text += "\n\n直接輸入即可，例如：\n" +
+			"・iPhone 17 Pro\n" +
+			"・MacBook Air\n" +
+			"・AirPods Pro 3"
+	}
+	send(chatID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
+}
+
+// askKeywordTyped is shown when someone chooses to write their own.
+func askKeywordTyped(chatID int64) {
+	send(chatID, "請輸入關鍵字。\n\n"+
+		"比對文章標題，不分大小寫。\n"+
+		"例如輸入「iPhone 17 Pro」，\n"+
+		"「[販售] 台北 iPhone 17 Pro 256G」就會通知你。", nil)
 }
 
 // askExclude exists because Pro and Pro Max share a prefix: a subscription to
 // "iPhone 17 Pro" catches every Pro Max too, and the way to say otherwise is a
 // syntax nobody should have to know.
+// suggestsProMax reports whether a keyword would also catch the Max variant.
+func suggestsProMax(keyword string) bool { return wizard.SuggestsProMax(keyword) }
+
 func askExclude(keyword string, chatID int64) {
 	rows := []([]tgbotapi.InlineKeyboardButton){
 		tgbotapi.NewInlineKeyboardRow(
@@ -126,8 +188,18 @@ func askExclude(keyword string, chatID int64) {
 			tgbotapi.NewInlineKeyboardButtonData("✖️ 取消", wizardCancel),
 		),
 	)
-	send(chatID, "3/4　要排除什麼嗎？\n\n「"+keyword+"」目前會連標題含 Max 的一起通知。",
-		tgbotapi.NewInlineKeyboardMarkup(rows...))
+	text := "3/4　要排除什麼嗎？\n\n"
+	if suggestsProMax(keyword) {
+		text += "注意：「" + keyword + "」也會命中 Pro Max，\n" +
+			"因為標題含「" + keyword + "」的文章包含：\n" +
+			"・[販售] 台北 " + keyword + " 256G　✅ 你要的\n" +
+			"・[販售] 台北 " + keyword + " Max 256G　❌ 可能不要\n\n" +
+			"要只收前者，選「排除 Max」。"
+	} else {
+		text += "標題含「" + keyword + "」的都會通知你。\n" +
+			"若有不想收到的字詞，可以排除。"
+	}
+	send(chatID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
 // askPrice offers ceilings drawn from what the product has actually been asking,
@@ -167,7 +239,8 @@ func askPrice(keyword string, chatID int64) {
 			tgbotapi.NewInlineKeyboardButtonData("✖️ 取消", wizardCancel),
 		),
 	)
-	send(chatID, "4/4　售價上限？"+hint, tgbotapi.NewInlineKeyboardMarkup(rows...))
+	text := "4/4　售價上限？\n\n低於這個金額才通知你。\n選「不限」就只看標題、不讀內文。" + hint
+	send(chatID, text, tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
 func askConfirm(w *wizard.Wizard, chatID int64) {

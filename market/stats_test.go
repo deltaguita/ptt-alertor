@@ -252,3 +252,29 @@ func TestStringShowsBothShareAndCount(t *testing.T) {
 		t.Errorf("the share is gone:\n%s", rendered)
 	}
 }
+
+func TestPopularRanksWhatTheBoardCarries(t *testing.T) {
+	Register(testKind{})
+	records := []Record{
+		{Kind: "test", Board: "macshop", PostType: "販售", Price: 1, PostedAt: time.Now(),
+			Attrs: Attrs{"size": "L", "colour": "red"}},
+		{Kind: "test", Board: "macshop", PostType: "販售", Price: 1, PostedAt: time.Now(),
+			Attrs: Attrs{"size": "L", "colour": "blue"}},
+		{Kind: "test", Board: "macshop", PostType: "販售", Price: 1, PostedAt: time.Now(),
+			Attrs: Attrs{"size": "M", "colour": "red"}},
+	}
+	counts := map[string]int{}
+	for _, record := range records {
+		if label := coarseLabel(testKind{}, record.Attrs); label != "" {
+			counts[label]++
+		}
+	}
+	// Two listings share a size and differ only in the attribute a keyword
+	// leaves out, so they must collapse into one suggestion.
+	if counts["widget L"] != 2 {
+		t.Errorf("coarse labels = %v, want the two L listings counted together", counts)
+	}
+	if counts["widget M"] != 1 {
+		t.Errorf("coarse labels = %v", counts)
+	}
+}
