@@ -217,9 +217,9 @@ func (d Distribution) String() string {
 			d.Kind.AttrLabel(name), strings.Join(shown, "、"))
 	}
 	for _, bucket := range d.Buckets {
-		fmt.Fprintf(&sb, "%s-%s %s %.0f%%\n",
+		fmt.Fprintf(&sb, "%s-%s %s %.0f%% (%d 筆)\n",
 			myutil.Comma(bucket.From), myutil.Comma(bucket.To),
-			strings.Repeat("█", barWidth(bucket.Share)), bucket.Share*100)
+			strings.Repeat("█", barWidth(bucket.Share)), bucket.Share*100, bucket.Count)
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }

@@ -2,6 +2,7 @@ package market
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,5 +229,26 @@ func TestBucketizeCountsEveryPrice(t *testing.T) {
 	}
 	if total != len(prices) {
 		t.Errorf("bands hold %d prices, want %d", total, len(prices))
+	}
+}
+
+func TestStringShowsBothShareAndCount(t *testing.T) {
+	// A share alone hides how much is behind it: 33% of three listings and 33%
+	// of thirty read the same.
+	records := []Record{
+		rec("a", "L", "red", 32000, 5),
+		rec("b", "L", "red", 32500, 4),
+		rec("c", "L", "red", 34000, 3),
+	}
+	rendered := Describe(testKind{}, records, Attrs{"size": "L"}, 30*24*time.Hour).String()
+
+	if !strings.Contains(rendered, "(2 筆)") {
+		t.Errorf("the band holding two listings does not say so:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "(1 筆)") {
+		t.Errorf("the band holding one listing does not say so:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "%") {
+		t.Errorf("the share is gone:\n%s", rendered)
 	}
 }
