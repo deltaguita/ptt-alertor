@@ -59,7 +59,7 @@ func processUpdate(update tgbotapi.Update) {
 			"from": update.Message.From.ID,
 			"text": update.Message.Text,
 		}).Info("Telegram Message Received")
-		
+
 		if update.Message.IsCommand() {
 			handleCommand(update)
 			return
@@ -83,15 +83,24 @@ func HandleRequest(w http.ResponseWriter, r *http.Request, _ httprouter.Params) 
 }
 
 func handleCallbackQuery(update tgbotapi.Update) {
-	var responseText string
 	userID := strconv.Itoa(update.CallbackQuery.From.ID)
-	switch update.CallbackQuery.Data {
+	chatID := update.CallbackQuery.Message.Chat.ID
+	data := update.CallbackQuery.Data
+	acknowledge(update.CallbackQuery.ID)
+
+	// The menu's own buttons are handled first; anything else is one of the
+	// confirmation buttons, whose data is the command to run.
+	if handleMenuCallback(userID, chatID, data) {
+		return
+	}
+	var responseText string
+	switch data {
 	case "CANCEL":
 		responseText = "取消"
 	default:
-		responseText = command.HandleCommand(update.CallbackQuery.Data, userID, true)
+		responseText = command.HandleCommand(data, userID, true)
 	}
-	SendTextMessage(update.CallbackQuery.Message.Chat.ID, responseText)
+	SendTextMessage(chatID, responseText)
 }
 
 func handleCommand(update tgbotapi.Update) {
@@ -104,13 +113,16 @@ func handleCommand(update tgbotapi.Update) {
 		responseText = command.HandleCommand(text, userID, true)
 	case "start":
 		command.HandleTelegramFollow(userID, chatID)
-		responseText = "歡迎使用 Ptt Alertor\n輸入「指令」查看相關功能。"
+		responseText = "歡迎使用 Ptt Alertor\n輸入「選單」用按鈕操作，或「指令」查看指令清單。"
 	case "help":
 		responseText = command.HandleCommand("help", userID, true)
 	case "list":
 		responseText = command.HandleCommand("list", userID, true)
 	case "ranking":
 		responseText = command.HandleCommand("ranking", userID, true)
+	case "menu":
+		sendMenu(chatID)
+		return
 	case "showkeyboard":
 		showReplyKeyboard(chatID)
 		return
@@ -128,12 +140,22 @@ func handleText(update tgbotapi.Update) {
 	userID := strconv.Itoa(update.Message.From.ID)
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text
-	
+
 	log.WithFields(log.Fields{
 		"userID": userID,
 		"text":   text,
 	}).Info("Processing text command")
-	
+
+	// A wizard in progress owns the next message: an answer such as "17 Pro" is
+	// not a command and must not be read as one.
+	if handleWizardText(userID, chatID, text) {
+		return
+	}
+	if text == "選單" || text == "menu" {
+		sendMenu(chatID)
+		return
+	}
+
 	if match, _ := regexp.MatchString("^(刪除|刪除作者)+\\s.*\\*+", text); match {
 		sendConfirmation(chatID, text)
 		return
@@ -179,6 +201,7 @@ func sendTextMessage(chatID int64, text string) {
 func showReplyKeyboard(chatID int64) {
 	keyboard := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("選單"),
 			tgbotapi.NewKeyboardButton("清單"),
 			tgbotapi.NewKeyboardButton("推文清單"),
 			tgbotapi.NewKeyboardButton("排行"),

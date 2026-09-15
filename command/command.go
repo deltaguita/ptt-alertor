@@ -36,6 +36,7 @@ var inputErrorTips = []string{
 // Commands is commands documents
 var Commands = map[string]map[string]string{
 	"一般": {
+		"選單": "用按鈕操作，不用記語法",
 		"指令": "可使用的指令清單",
 		"清單": "設定的看板、關鍵字、作者",
 		"排行": "前五名追蹤的關鍵字、作者",
