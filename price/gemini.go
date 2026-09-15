@@ -130,6 +130,54 @@ type geminiResponse struct {
 	} `json:"error"`
 }
 
+// statusExhausted is what the API returns when the request rate has run past the
+// plan's allowance.
+const statusExhausted = "RESOURCE_EXHAUSTED"
+
+// call sends one request, pacing it against the shared allowance. A refusal for
+// running over the rate is retried once: the limiter keeps the steady rate below
+// the line, but the quota window and this process's clock do not align exactly,
+// and losing a listing to a boundary is worse than waiting a few seconds.
+func (g *Gemini) call(body []byte) (geminiResponse, error) {
+	for attempt := 0; ; attempt++ {
+		apiLimiter.wait()
+		parsed, err := g.post(body)
+		if err != nil {
+			return geminiResponse{}, err
+		}
+		if parsed.Error == nil || parsed.Error.Status != statusExhausted || attempt > 0 {
+			return parsed, nil
+		}
+		log.WithField("model", g.Model).Warn("Gemini Rate Limited, Retrying")
+		time.Sleep(retryPause)
+	}
+}
+
+// retryPause covers the remainder of a quota minute; the API suggests about
+// thirty seconds when it refuses.
+const retryPause = 35 * time.Second
+
+func (g *Gemini) post(body []byte) (geminiResponse, error) {
+	req, err := http.NewRequest(http.MethodPost, endpoint+g.Model+":generateContent", bytes.NewReader(body))
+	if err != nil {
+		return geminiResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", g.APIKey)
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return geminiResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	var parsed geminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return geminiResponse{}, err
+	}
+	return parsed, nil
+}
+
 // Extract asks Gemini to read one article body for the attributes a kind needs.
 func (g *Gemini) Extract(content string, kind Kind) (Info, error) {
 	if g.APIKey == "" {
@@ -154,21 +202,8 @@ func (g *Gemini) Extract(content string, kind Kind) (Info, error) {
 		return Info{}, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, endpoint+g.Model+":generateContent", bytes.NewReader(body))
+	parsed, err := g.call(body)
 	if err != nil {
-		return Info{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-goog-api-key", g.APIKey)
-
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return Info{}, err
-	}
-	defer resp.Body.Close()
-
-	var parsed geminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return Info{}, err
 	}
 	if parsed.Error != nil {
