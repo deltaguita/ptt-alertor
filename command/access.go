@@ -41,16 +41,36 @@ func guard(text, account string) (string, bool) {
 		return "這個 bot 需要邀請碼才能使用。\n\n" +
 			"跟管理員要一組邀請碼，直接把它貼過來就會開通。", true
 	}
-	if err := invite.Redeem(text, account); err != nil {
-		log.WithFields(log.Fields{"account": account}).WithError(err).Info("Invite Redeem Rejected")
-		return err.Error() + "。\n請向管理員確認。", true
+	code, found := invite.Find(text)
+	if !found {
+		log.WithField("account", account).Info("Invite Not Found")
+		return invite.ErrUnknown.Error() + "。\n請向管理員確認。", true
 	}
+	if code.Redeemed() {
+		log.WithField("account", account).Info("Invite Already Used")
+		return invite.ErrUsed.Error() + "。\n請向管理員確認。", true
+	}
+
 	u := models.User().Find(account)
-	u.Profile.Account = account
+	if u.Profile.Account == "" {
+		// The record is created when the conversation starts. Without one there
+		// is nothing to grant access to, and spending the code here would leave
+		// the person with neither.
+		return "請先輸入 /start，再把邀請碼貼過來。", true
+	}
 	u.Enable = true
 	if err := u.Update(); err != nil {
-		log.WithError(err).Error("Invite Enable Failed")
-		return "開通失敗，請稍後再試或聯絡管理員。", true
+		// The code is deliberately left unspent: losing the code *and* staying
+		// locked out is the worst of both, and it is the failure a person cannot
+		// recover from on their own.
+		log.WithField("account", account).WithError(err).Error("Invite Enable Failed")
+		return "開通失敗，請稍後再試或聯絡管理員。\n（邀請碼尚未被使用，可以再試一次）", true
+	}
+	if err := invite.Redeem(text, account); err != nil {
+		// Access is already granted. A code that could be spent twice is the
+		// lesser fault, so it is logged rather than undone.
+		log.WithFields(log.Fields{"account": account}).WithError(err).
+			Error("Invite Marked As Used Failed")
 	}
 	log.WithField("account", account).Info("Invite Redeemed")
 	return "開通成功，歡迎使用 Ptt Alertor！\n\n輸入「選單」用按鈕操作，或「指令」查看指令清單。", true
