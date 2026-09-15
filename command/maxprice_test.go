@@ -69,3 +69,15 @@ func TestRemoveMaxPriceSyntax(t *testing.T) {
 		t.Errorf("board=%q keyword=%q", args[1], args[2])
 	}
 }
+
+func TestAddMaxPriceAcceptsExclusionSyntax(t *testing.T) {
+	// Pro and Pro Max share a prefix, so a subscriber has to be able to spell
+	// the exclusion inside the keyword.
+	args := addMaxPriceRe.FindStringSubmatch("新增售價 macshop iPhone 17 Pro&!Max 35000")
+	if args == nil {
+		t.Fatal("exclusion syntax did not parse")
+	}
+	if args[2] != "iPhone 17 Pro&!Max" || args[3] != "35000" {
+		t.Errorf("keyword=%q max=%q", args[2], args[3])
+	}
+}
