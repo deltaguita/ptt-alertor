@@ -154,16 +154,25 @@ func loadFile(path string, since time.Time) ([]Record, error) {
 	return records, scanner.Err()
 }
 
-// Codes returns the article codes already recorded for a board, so a survey does
-// not pay to extract an article it has already read.
-func Codes(since time.Time) (map[string]bool, error) {
+// History returns the article codes already recorded, so a survey does not pay
+// to extract an article it has already read, along with the most recent posting
+// among them. That watermark is how a survey knows when it has caught up: it
+// keeps walking back until it reaches articles it already holds, so a gap left
+// by downtime is filled rather than stepped over.
+//
+// The watermark is zero when nothing is recorded yet.
+func History(since time.Time) (map[string]bool, time.Time, error) {
 	records, err := Load(since)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	seen := make(map[string]bool, len(records))
+	watermark := time.Time{}
 	for _, record := range records {
 		seen[record.Code] = true
+		if record.PostedAt.After(watermark) {
+			watermark = record.PostedAt
+		}
 	}
-	return seen, nil
+	return seen, watermark, nil
 }
