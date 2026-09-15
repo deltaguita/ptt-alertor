@@ -5,12 +5,13 @@ import (
 	"testing"
 )
 
+// A made-up id: a real one in a public repository is nobody's business.
 func TestIsAdminNeedsAnExactMatch(t *testing.T) {
-	t.Setenv("ADMIN_ACCOUNT", "5745814284")
-	if !IsAdmin("5745814284") {
+	t.Setenv("ADMIN_ACCOUNT", "999000111")
+	if !IsAdmin("999000111") {
 		t.Error("the configured account is not recognised as admin")
 	}
-	for _, account := range []string{"", "574581428", "57458142840", "other"} {
+	for _, account := range []string{"", "99900011", "9990001110", "other"} {
 		if IsAdmin(account) {
 			t.Errorf("%q was accepted as admin", account)
 		}
@@ -21,7 +22,7 @@ func TestIsAdminIsClosedWhenUnconfigured(t *testing.T) {
 	// An empty setting must not make everyone an administrator -- least of all
 	// an account whose id is itself empty.
 	t.Setenv("ADMIN_ACCOUNT", "")
-	for _, account := range []string{"", "5745814284", "anyone"} {
+	for _, account := range []string{"", "999000111", "anyone"} {
 		if IsAdmin(account) {
 			t.Errorf("%q was admin with ADMIN_ACCOUNT unset", account)
 		}
@@ -29,7 +30,7 @@ func TestIsAdminIsClosedWhenUnconfigured(t *testing.T) {
 }
 
 func TestAdminCommandsAreInvisibleToOthers(t *testing.T) {
-	t.Setenv("ADMIN_ACCOUNT", "5745814284")
+	t.Setenv("ADMIN_ACCOUNT", "999000111")
 	for _, text := range []string{"邀請碼", "使用者", "停用 123", "啟用 123", "撤銷邀請碼 ABC"} {
 		reply, handled := handleAdmin(text, "someone-else")
 		if handled {
